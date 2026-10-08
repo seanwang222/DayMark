@@ -1,0 +1,22 @@
+# 依赖
+node_modules/
+
+# 构建产物（均可由 npm run build / build:electron 再生）
+dist/
+release/
+archive/
+index-standalone.html
+shots/
+
+# verify 脚本的临时打包结果（源文件 verify-*.mjs 仍需入库）
+.workbuddy/*-bundle.mjs
+
+# 本地数据与日志
+*.log
+npm-debug.log*
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

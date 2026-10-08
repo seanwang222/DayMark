@@ -1,0 +1,87 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* 全局样式 */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  height: 100%;
+  width: 100%;
+}
+
+/* 页面级滚动条常驻：待办/打卡列表出现滚动条时卡片宽度保持固定，不发生布局跳动 */
+html {
+  overflow-y: scroll;
+  scrollbar-gutter: stable;
+}
+
+body {
+  font-family: 'Noto Sans SC', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background-color: #0d1117;
+  color: #c9d1d9;
+}
+
+/* 自定义滚动条（胶囊滑块，上下预留空间不贴页顶/底部菜单栏） */
+::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+  margin: 8px 0;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #30363d;
+  border-radius: 999px;
+  border: 4px solid transparent;
+  background-clip: padding-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #484f58;
+  border: 4px solid transparent;
+  background-clip: padding-box;
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* 页面过渡动画 */
+.page-enter {
+  opacity: 0;
+  transform: translateY(10px);
+}
+
+.page-enter-active {
+  opacity: 1;
+  transform: translateY(0);
+  transition: opacity 200ms, transform 200ms;
+}
+
+/* 打卡开关 */
+.checkin-toggle {
+  transition: all 0.2s ease;
+}
+
+.checkin-toggle:hover {
+  opacity: 0.85;
+}
+
+/* 卡片悬停效果 */
+.hover-card {
+  transition: border-color 0.2s ease;
+}
+
+.hover-card:hover {
+  border-color: #1f6feb !important;
+}

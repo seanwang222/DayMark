@@ -1,0 +1,7 @@
+# 统一以 LF 入库与检出，避免 Windows 上 autocrlf 造成整文件换行差异
+* text=auto eol=lf
+*.png binary
+*.exe binary
+*.dll binary
+*.dat binary
+*.pak binary
