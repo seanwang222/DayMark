@@ -27,3 +27,6 @@ npm-debug.log*
 .idea/
 .DS_Store
 Thumbs.db
+
+# agent 本机分析产物（Better Harness 体检报告等，不入库）
+.qoder/
