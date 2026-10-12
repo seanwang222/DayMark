@@ -8,7 +8,9 @@ DayMark（React 18 + Vite 4 渲染层，Electron 44 桌面层）的协作约定�
 
 - **改数据/同步相关代码前先跑 `npm run verify`**（六套，见 README 脚本表）；改完再跑一次。任一套失败就不要提交。装好本地钩子可以省掉这一步：`npm run hooks:install` 后每次 commit 自动跑（绕过：`--no-verify`）。
 - 涉及渲染层或主进程的时序改动，另跑 `npm run build:standalone` 确认打包链没断。
-- 本项目**没有 git remote**，也不要有意识地推送、发布或调用真实坚果云账号。同步类验证一律走 `.workbuddy/verify-webdav.mjs` 里的本地 mock 服务。
+- 本仓库是 **GitHub 公开仓库**（`origin` = `https://github.com/wangsichen222/DayMark`，默认分支 `master`），推送即发布。公开历史撤回不掉，所以**任何提交都不许带用户数据、坚果云凭据、`userData` 下的快照、`.workbuddy/memory/` 本机笔记或一次性改写脚本**——它们已在 `.gitignore` 里，别用 `git add -f` 绕过。
+- 提交身份固定为 GitHub noreply 邮箱 `59314215+wangsichen222@users.noreply.github.com`，避免真实邮箱进公开历史。本机全局 git 身份是空值，因此提交要显式 `git -c user.name="Sichen Wang" -c user.email="59314215+wangsichen222@users.noreply.github.com" commit`。
+- 不要调用真实坚果云账号。同步类验证一律走 `.workbuddy/verify-webdav.mjs` 里的本地 mock 服务。
 - 启动 Electron GUI（`DAYMARK_SMOKE` / `electron:dev`）会打开真实窗口并读写 `%APPDATA%\daily-checkin-app\` 下的用户数据，需人工确认后再执行。冒烟模式已把 `userData` 重定向到临时目录，但仍属 GUI 操作。主进程带单实例锁，第二次启动只会把已有窗口调到前台。
 
 ## 1. 存储模型（最容易改错的地方）
