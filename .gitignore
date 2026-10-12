@@ -11,6 +11,13 @@ shots/
 # verify 脚本的临时打包结果（源文件 verify-*.mjs 仍需入库）
 .workbuddy/*-bundle.mjs
 
+# 本机开发笔记与一次性改写脚本（不入库；verify-*.mjs 是回归入口，仍跟踪）
+.workbuddy/memory/
+.workbuddy/fix-radius.mjs
+.workbuddy/retheme.mjs
+.workbuddy/revert-theme.mjs
+.workbuddy/unify-radius.mjs
+
 # 本地数据与日志
 *.log
 npm-debug.log*

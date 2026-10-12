@@ -193,7 +193,12 @@ function TodoPage() {
   // 确认保存编辑后的完成记录
   const handleConfirmEditRecord = (extra) => {
     if (recordEditTodo) {
-      toggleTodo(recordEditTodo.todo.id, extra);
+      // 不能走 toggleTodo：它是「翻转」语义，会把已完成的待办翻成未完成并清空刚填的复盘
+      editTodo(recordEditTodo.todo.id, {
+        completed: true,
+        completedTime: extra.completedTime,
+        review: extra.review,
+      });
       setRecordEditOpen(false);
       setRecordEditTodo(null);
       refreshTodos();

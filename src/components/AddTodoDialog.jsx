@@ -171,13 +171,17 @@ function AddTodoDialog({ open, onClose, onSave, editTodo }) {
     // 把行动列表以换行拼回 description.action，保留旧字段兼容性（不依赖也不在 UI 收集）
     const actionText = cleanedActions.map((a) => a.name).join('\n');
 
+    // 本对话框已不收集 SITUATION / RESULT，编辑时把旧值原样带回，
+    // 否则 storage.editTodo 会用空串无条件覆盖掉历史记录
+    const prevDesc = (editTodo && editTodo.description) || {};
+
     onSave({
       title: trimmed,
       description: {
-        situation: '',
+        situation: prevDesc.situation || '',
         target: target.trim(),
         action: actionText,
-        result: '',
+        result: prevDesc.result || '',
       },
       dueDate,
       priority,

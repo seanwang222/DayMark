@@ -22,6 +22,7 @@ import {
   restoreData,
   getDataOverview,
 } from '../utils/backup';
+import { flushNow } from '../utils/persistence';
 import SmartSyncPanel from './SyncPanel';
 
 /**
@@ -188,6 +189,8 @@ function DataManagerDialog({ open, onClose }) {
   // 有恢复结果时，关闭即刷新页面，让所有组件重新读取最新数据
   const handleClose = () => {
     if (result) {
+      // 恢复走的是防抖落盘， reload 会掐掉未触发的定时器 —— 先同步写一次文件
+      flushNow();
       window.location.reload();
       return;
     }

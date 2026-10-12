@@ -223,4 +223,62 @@ reset();
 assert.equal(getOverallStats(), null, '无项目时 getOverallStats 应为 null');
 console.log('OK: 场景H（无项目时 getOverallStats 返回 null）');
 
+// ==================== 场景I：多项视图的分母口径与单项目 / 全局统计一致 ====================
+// 起因：不传 itemId 时 total 恒等于「项目总数」，于是项目创建之前和还没到来的日子
+// 都被当成未完成，多项视图的完成率被系统性拉低（跨年视图把整个未来月份算成 0%）。
+reset();
+addCheckinItem('早项目');
+addCheckinItem('晚项目');
+const [I1, I2] = getCheckinItems();
+const rawI = JSON.parse(localStorage.getItem('daily_checkin_items'));
+rawI[0].createdAt = daysAgo(20);
+rawI[1].createdAt = daysAgo(3);
+localStorage.setItem('daily_checkin_items', JSON.stringify(rawI));
+[20, 10, 4, 1].forEach((n) => toggleCheckin(daysAgo(n), I1.id, true, { time: '07:00', note: '' }));
+[3, 1].forEach((n) => toggleCheckin(daysAgo(n), I2.id, true, { time: '07:00', note: '' }));
+
+const nowI = new Date();
+const monthI = getMonthlyData(nowI.getFullYear(), nowI.getMonth() + 1);
+monthI.forEach((d) => {
+  const shouldCount = d.date <= fmt(nowI);
+  const activeCount = [rawI[0], rawI[1]].filter((i) => i.createdAt <= d.date).length;
+  if (shouldCount && activeCount > 0) {
+    assert.equal(d.total, activeCount, `${d.date} 的分母应为当日已存在的项目数 ${activeCount}，实际 ${d.total}`);
+    assert.equal(d.excluded, undefined, `${d.date} 已到来且有项目，不该标记 excluded`);
+  } else {
+    assert.equal(d.total, 0, `${d.date}（项目未创建或日子还没到）不该计入分母，实际 ${d.total}`);
+    assert.equal(d.excluded, true, `${d.date} 应标记 excluded`);
+  }
+});
+
+// 多项月度汇总 = 各单项目月度汇总之和（同口径才能对齐）
+const sumOf = (rows) => rows.reduce((n, d) => n + d.total, 0);
+const sumDone = (rows) => rows.reduce((n, d) => n + d.completed, 0);
+const single = [I1.id, I2.id].map((id) => getMonthlyData(nowI.getFullYear(), nowI.getMonth() + 1, id));
+assert.equal(sumOf(monthI), single.reduce((n, rows) => n + sumOf(rows), 0), '多项 total 应等于各单项目 total 之和');
+assert.equal(sumDone(monthI), single.reduce((n, rows) => n + sumDone(rows), 0), '多项 completed 应等于各单项目 completed 之和');
+
+// 完成率的分母只含「项目存在且日子已到」的 项目·天，不再是 天数 × 项目数
+const monthPrefix = `${nowI.getFullYear()}-${pad2(nowI.getMonth() + 1)}`;
+const donePairs = [
+  ...[20, 10, 4, 1].map((n) => ({ date: daysAgo(n), item: I1.id })),
+  ...[3, 1].map((n) => ({ date: daysAgo(n), item: I2.id })),
+].filter((p) => p.date.startsWith(monthPrefix) && p.date <= fmt(nowI));
+const expectedTotal = sumOf(monthI);
+const doneI = sumDone(monthI);
+assert.equal(doneI, donePairs.length, `本月应统计到 ${donePairs.length} 次完成，实际 ${doneI}`);
+assert.ok(expectedTotal < monthI.length * 2, `分母不该是「天数 × 项目数」，实际 ${expectedTotal} / ${monthI.length * 2}`);
+assert.ok(expectedTotal > doneI, '分母应大于分子（存在未打卡的日子）');
+
+// 未来月份不再被算成一堆 0%：年度汇总只统计已经到来的日子
+const yearI = getYearlyData(nowI.getFullYear());
+const futureMonths = yearI.monthData.filter((m) => Number(m.month.slice(5, 7)) > nowI.getMonth() + 1);
+futureMonths.forEach((m) => {
+  assert.equal(m.total, 0, `${m.month} 还没到来，不应有分母 ${m.total}`);
+});
+assert.equal(yearI.avgRate, Math.round(
+  yearI.monthData.reduce((n, m) => n + m.completed, 0) / yearI.monthData.reduce((n, m) => n + m.total, 0) * 100,
+), '年度完成率应基于已到来的项目·天数');
+console.log(`OK: 场景I（多项口径按当日已存在项目 + 不统计未来日）${doneI}/${expectedTotal} → ${Math.round(doneI / expectedTotal * 100)}%`);
+
 console.log('\n全部验证通过 ✅');

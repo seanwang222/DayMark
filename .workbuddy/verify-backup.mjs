@@ -201,4 +201,47 @@ assert.equal(legacy.todos.length, 1, '旧版优先级行未解析');
 assert.equal(legacy.todos[0].priority, 'not_urgent_important', '旧版 low 未降级为默认档');
 console.log('OK: 异常输入处理正确');
 
+/* ---- 8. 公式注入护栏：导出加护栏、导入脱护栏，往返仍无损 ---- */
+localStorage.clear();
+const evilName = "=cmd|' /C calc'!A0";
+const evilTitle = '+SUM(A1:A9)';
+const evilTarget = '-2+3';
+const evilNote = '=HYPERLINK("http://x","y"),带逗号与引号';
+addCheckinItem(evilName);
+addCheckinItem('正常项目');
+const [E1, E2] = getCheckinItems();
+toggleCheckin('2026-09-05', E1.id, true, { time: '08:00', note: evilNote });
+addTodo({ title: evilTitle, description: { target: evilTarget }, priority: 'not_urgent_important' });
+
+const evilCsv = backup.buildAllCSV();
+[evilName, evilTitle, evilTarget, evilNote].forEach((raw) => {
+  // 含引号的单元格在 CSV 里会被双写转义，因此两种形态都算加了护栏
+  const guarded = `'${raw}`;
+  const guardedEscaped = `'${raw.replace(/"/g, '""')}`;
+  assert.ok(
+    evilCsv.includes(guarded) || evilCsv.includes(guardedEscaped),
+    `导出应给以 = + - @ 开头的内容加单引号护栏，缺失: ${raw}`,
+  );
+  assert.ok(
+    !evilCsv.split('\n').some((line) => line.startsWith(`${raw},`) || line === `"${raw}"`),
+    `单元格不应以公式字符直接开头: ${raw}`,
+  );
+});
+
+localStorage.clear();
+const evilParsed = backup.parseBackupCSV(evilCsv);
+backup.restoreData(evilParsed, 'replace');
+assert.deepEqual(
+  getCheckinItems().map((i) => i.name).sort(),
+  [evilName, '正常项目'].sort(),
+  '导入后项目名应还原为原文（不带护栏撇号）',
+);
+const evilTodo = getTodos().find((t) => t.description.target === evilTarget);
+assert.ok(evilTodo, `导入后目标应还原为原文: ${evilTarget}`);
+const names = Object.keys(getCheckinRecords()['2026-09-05'] || {});
+assert.equal(names.length, 1, '护栏不应影响记录归属');
+const rec = getCheckinRecords()['2026-09-05'][names[0]];
+assert.equal(rec.note, evilNote, '备注应原样还原（含逗号与引号）');
+console.log('OK: 公式注入护栏生效且导出→导入无损');
+
 console.log('\n全部验证通过 ✅');

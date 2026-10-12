@@ -16,6 +16,8 @@ import {
   getCheckinRecords,
   getTodos,
   getToday,
+  getUpcomingPhases,
+  isPastDue,
   toggleCheckin,
   toggleTodo,
   toggleTodoPhase,
@@ -23,6 +25,8 @@ import {
 } from '../utils/storage';
 
 const WEEK_HEADERS = ['一', '二', '三', '四', '五', '六', '日'];
+/** 提醒的向前观察窗口（天） */
+const REMINDER_WINDOW = 7;
 const pad = (n) => String(n).padStart(2, '0');
 
 /** 把 YYYY-MM-DD 显示为 MM-DD */
@@ -81,7 +85,7 @@ const DetailRow = ({ e, todayStr, selectedDate, onToggleCheckin, onToggleTodo, o
   if (e.kind === 'todo') {
     const t = e.todo;
     const cfg = TODO_PRIORITIES[t.priority] || TODO_PRIORITIES.not_urgent_important;
-    const overdue = !t.completed && t.dueDate < todayStr;
+    const overdue = isPastDue(t.completed, t.dueDate, todayStr);
     return (
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, py: 0.5 }}>
         <Checkbox
@@ -105,7 +109,7 @@ const DetailRow = ({ e, todayStr, selectedDate, onToggleCheckin, onToggleTodo, o
   // phase
   const p = e.phase;
   const pcfg = TODO_PRIORITIES[e.todo.priority] || TODO_PRIORITIES.not_urgent_important;
-  const overdue = !p.completed && p.dueDate < todayStr;
+  const overdue = isPastDue(p.completed, p.dueDate, todayStr);
   return (
     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, py: 0.5 }}>
       <Checkbox
@@ -126,6 +130,43 @@ const DetailRow = ({ e, todayStr, selectedDate, onToggleCheckin, onToggleTodo, o
         )}
       </Box>
       <Chip label={pcfg.label} size="small" sx={{ color: pcfg.color, bgcolor: pcfg.bg, fontSize: '0.65rem', height: 20 }} />
+    </Box>
+  );
+};
+
+/** 剩余天数 → 提醒文案与颜色（逾期最紧急，故用状态语义的红色） */
+const reminderUrgency = (daysLeft) => {
+  if (daysLeft < 0) return { text: `已逾期 ${-daysLeft} 天`, color: '#f85149' };
+  if (daysLeft === 0) return { text: '今天到期', color: '#f85149' };
+  if (daysLeft === 1) return { text: '明天到期', color: '#d29922' };
+  return { text: `${daysLeft} 天后`, color: '#58a6ff' };
+};
+
+/** 未来一周待完成的行动项：可直接勾选完成，逾期项排在最前 */
+const ReminderRow = ({ item, onTogglePhase }) => {
+  const { todo, phase, dueDate, daysLeft } = item;
+  const urgency = reminderUrgency(daysLeft);
+  const cfg = TODO_PRIORITIES[todo.priority] || TODO_PRIORITIES.not_urgent_important;
+  return (
+    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, py: 0.5 }}>
+      <Checkbox
+        checked={false}
+        onChange={() => onTogglePhase(todo.id, phase.id)}
+        size="small"
+        sx={{ color: '#484f58', '&:hover': { color: '#3fb950' }, p: 0.3 }}
+      />
+      <Box sx={{ flex: 1, minWidth: 0 }}>
+        <Typography variant="body2" sx={{ color: '#c9d1d9', fontSize: '0.82rem' }}>
+          {todo.title} <span style={{ color: '#6e7681' }}>›</span> {phase.name}
+        </Typography>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.2, mt: 0.1 }}>
+          <EventIcon sx={{ fontSize: 12, color: urgency.color }} />
+          <Typography variant="caption" sx={{ color: urgency.color, fontSize: '0.65rem' }}>
+            截止 {fmtMd(dueDate)} · {urgency.text}
+          </Typography>
+        </Box>
+      </Box>
+      <Chip label={cfg.label} size="small" sx={{ color: cfg.color, bgcolor: cfg.bg, fontSize: '0.65rem', height: 20 }} />
     </Box>
   );
 };
@@ -219,6 +260,9 @@ function SchedulePage() {
   const selectedCheckins = selectedEntries.filter((e) => e.kind === 'checkin');
   const selectedTodos = selectedEntries.filter((e) => e.kind === 'todo');
   const selectedPhases = selectedEntries.filter((e) => e.kind === 'phase');
+
+  // 提醒以「今天」为锚点滚动向前看一周，与左栏选中的日期无关
+  const reminders = useMemo(() => getUpcomingPhases(REMINDER_WINDOW, todayStr), [todos, todayStr]);
 
   return (
     <Box sx={{ px: 1.5, pt: 2, pb: 2, width: '100%', minHeight: '100%', display: 'flex', flexDirection: 'column' }}>
@@ -371,6 +415,24 @@ function SchedulePage() {
           <DetailGroup title="打卡" color="#3fb950" entries={selectedCheckins} todayStr={todayStr} selectedDate={selectedDate} onToggleCheckin={onToggleCheckin} onToggleTodo={onToggleTodo} onTogglePhase={onTogglePhase} />
           <DetailGroup title="待办" color="#d29922" entries={selectedTodos} todayStr={todayStr} selectedDate={selectedDate} onToggleCheckin={onToggleCheckin} onToggleTodo={onToggleTodo} onTogglePhase={onTogglePhase} />
           <DetailGroup title="行动" color="#58a6ff" entries={selectedPhases} todayStr={todayStr} selectedDate={selectedDate} onToggleCheckin={onToggleCheckin} onToggleTodo={onToggleTodo} onTogglePhase={onTogglePhase} />
+
+          {/* 提醒：未来一周待完成的行动项，逾期置顶 */}
+          <Box sx={{ borderTop: '1px solid #30363d', mt: 1, pt: 1.5 }}>
+            {/* 标题不用红色：本页红色专指「已过期」状态，逾期与否已在每条提醒里标出 */}
+            <Typography variant="caption" sx={{ color: '#d29922', fontWeight: 700, fontSize: '0.8rem', display: 'block', mb: 0.3 }}>
+              提醒（{reminders.length}）
+            </Typography>
+            <Typography variant="caption" sx={{ color: '#484f58', fontSize: '0.7rem', display: 'block', mb: 0.5 }}>
+              未来 {REMINDER_WINDOW} 天内到期的行动项，按紧急度排列
+            </Typography>
+            {reminders.length === 0 ? (
+              <Typography variant="caption" sx={{ color: '#484f58', fontSize: '0.75rem' }}>近一周没有待完成的行动项</Typography>
+            ) : (
+              reminders.map((item) => (
+                <ReminderRow key={`${item.todo.id}-${item.phase.id}`} item={item} onTogglePhase={onTogglePhase} />
+              ))
+            )}
+          </Box>
         </Box>
       </Box>
     </Box>

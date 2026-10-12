@@ -1,0 +1,21 @@
+#!/bin/sh
+# 提交前质量门：跑全量回归校验（六套 verify），任一失败就阻止提交。
+# 临时绕过：git commit --no-verify
+# 安装方式：npm run hooks:install
+
+if [ ! -d node_modules ]; then
+  echo "[pre-commit] 未安装依赖，跳过 verify（先 npm install）"
+  exit 0
+fi
+
+npm run verify
+status=$?
+
+if [ $status -ne 0 ]; then
+  echo ""
+  echo "[pre-commit] verify 未通过，已阻止提交。"
+  echo "[pre-commit] 修好后重试；确需跳过用 git commit --no-verify"
+  exit 1
+fi
+
+exit 0

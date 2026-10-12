@@ -7,6 +7,8 @@ contextBridge.exposeInMainWorld('daymark', {
   isElectron: true,
   loadSnapshot: () => ipcRenderer.invoke('daymark:load-snapshot'),
   saveSnapshot: (data) => ipcRenderer.invoke('daymark:save-snapshot', data),
+  // 关窗 / 刷新前的同步兜底：beforeunload 里等不到 invoke 的异步结果
+  saveSnapshotSync: (data) => ipcRenderer.sendSync('daymark:save-snapshot-sync', data),
   getConfig: () => ipcRenderer.invoke('daymark:get-config'),
   setConfig: (cfg) => ipcRenderer.invoke('daymark:set-config', cfg),
   testConnection: () => ipcRenderer.invoke('daymark:test-connection'),

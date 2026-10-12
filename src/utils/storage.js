@@ -6,10 +6,11 @@
  * - 待办优先级：四象限 urgent_important / urgent_not_important / not_urgent_important / not_urgent_not_important
  * - 待办完成：{ completedTime, review: { keep, improve, stop, start } }
  *
- * 数据持久化：所有写操作统一走 safeWrite，末尾触发 scheduleFlush 落盘到本机文件
- * （仅在 Electron 桌面版生效；浏览器 / Node 测试环境为 no-op）。
+ * 数据持久化：所有写操作统一走 safeWrite，末尾通知 onDataWritten 的订阅者，
+ * 由 utils/persistence 决定「何时」落盘到本机文件（浏览器 / Node 测试环境无订阅者即 no-op）。
+ * 本模块刻意不 import persistence：数据访问层不该决定传输时序，
+ * 否则模块导入期的 migrateIfNeeded 会在启动回填完成前就把未回填的 localStorage 写回文件。
  */
-import { scheduleFlush } from './persistence';
 
 /* ==================== 通用工具 ==================== */
 
@@ -51,6 +52,44 @@ function getToday() {
   const month = String(d.getMonth() + 1).padStart(2, '0');
   const day = String(d.getDate()).padStart(2, '0');
   return `${year}-${month}-${day}`;
+}
+
+/** 两个 YYYY-MM-DD 之间的整天差（b - a）；无法解析时按 0 处理 */
+function daysBetween(a, b) {
+  const ta = Date.parse(`${a}T00:00:00`);
+  const tb = Date.parse(`${b}T00:00:00`);
+  if (Number.isNaN(ta) || Number.isNaN(tb)) return 0;
+  return Math.round((tb - ta) / 86400000);
+}
+
+/**
+ * 未来 withinDays 天内需要完成的行动项（含已逾期的），按紧急度从高到低排列。
+ * 排序只有一个键：剩余天数升序 —— 逾期项是负数，因此天然置顶，无需再单独分类。
+ * 未设截止日的行动项无法判定紧急度，不进提醒；所属待办已完成时其行动也不再提醒。
+ * @returns {Array<{todo:Object, phase:Object, dueDate:string, daysLeft:number, overdue:boolean}>}
+ */
+export function getUpcomingPhases(withinDays = 7, todayStr = getToday()) {
+  const out = [];
+  getTodos().forEach((todo) => {
+    if (todo.completed) return;
+    (todo.phases || []).forEach((phase) => {
+      if (phase.completed || !phase.dueDate) return;
+      const daysLeft = daysBetween(todayStr, phase.dueDate);
+      if (daysLeft > withinDays) return;
+      out.push({ todo, phase, dueDate: phase.dueDate, daysLeft, overdue: daysLeft < 0 });
+    });
+  });
+  out.sort((a, b) => a.daysLeft - b.daysLeft || String(a.todo.title).localeCompare(String(b.todo.title)));
+  return out;
+}
+
+/**
+ * 是否已过期：必须有截止日，且截止日早于今天（当天到期不算过期）
+ * 空 dueDate 不能直接参与字符串比较——'' < '2026-10-11' 恒真，
+ * 那会把所有未设截止日的待办都标成「已过期」。
+ */
+export function isPastDue(completed, dueDate, todayStr) {
+  return !completed && !!dueDate && String(dueDate) < String(todayStr);
 }
 
 /**
@@ -95,14 +134,36 @@ function safeRead(key, defaultValue) {
   }
 }
 
+/**
+ * 「数据已写入 localStorage」订阅表。
+ * 必须在模块导入期就初始化：migrateIfNeeded() 在文件末尾的顶层就会调用 safeWrite。
+ */
+const writeListeners = [];
+
+/** 订阅数据变更（persistence 用它做防抖落盘），返回取消订阅函数 */
+export function onDataWritten(cb) {
+  writeListeners.push(cb);
+  return () => {
+    const i = writeListeners.indexOf(cb);
+    if (i !== -1) writeListeners.splice(i, 1);
+  };
+}
+
 function safeWrite(key, value) {
   try {
     localStorage.setItem(key, JSON.stringify(value));
   } catch (e) {
     console.error('LocalStorage write failed:', e);
+    return;
   }
-  // 桌面版：防抖落盘（浏览器 / 测试环境 no-op）
-  scheduleFlush();
+  // 桌面版：由 persistence 决定何时落盘；监听器异常不应影响本次写入结果
+  writeListeners.forEach((cb) => {
+    try {
+      cb(key);
+    } catch (e) {
+      console.error('onDataWritten listener failed:', e);
+    }
+  });
 }
 
 /* ==================== 数据迁移 ==================== */
@@ -335,6 +396,7 @@ export function getMonthlyData(year, month, itemId) {
   const daysInMonth = new Date(year, month, 0).getDate();
   const items = getCheckinItems();
   const records = getCheckinRecords();
+  const today = getToday();
   const data = [];
 
   // 单项目模式：统计起点为项目创建日，避免把项目诞生前的日子算成「未完成」
@@ -345,7 +407,6 @@ export function getMonthlyData(year, month, itemId) {
   }
 
   const list = itemId ? items.filter((i) => i.id === itemId) : items;
-  const total = list.length;
 
   for (let day = 1; day <= daysInMonth; day++) {
     const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
@@ -355,9 +416,19 @@ export function getMonthlyData(year, month, itemId) {
       continue;
     }
 
+    // 分母只算「这一天已经存在的项目」，并且还没到来的日子不参与统计。
+    // 口径与 getOverallStats / getItemStats 对齐：项目诞生前与未来日子都不是「未完成」，
+    // 否则多项视图里晚建的项目会系统性拉低完成率（跨年视图更是把整个未来月份算成 0%）。
+    const active = list.filter((i) => !i.createdAt || i.createdAt.slice(0, 10) <= dateStr);
+    const total = active.length;
+    if (total === 0 || dateStr > today) {
+      data.push({ date: dateStr, completed: 0, total: 0, rate: 0, excluded: true });
+      continue;
+    }
+
     const record = records[dateStr] || {};
     let completed = 0;
-    list.forEach((item) => {
+    active.forEach((item) => {
       const r = record[item.id];
       if (r && (r === true || (typeof r === 'object' && r.completed))) {
         completed++;
@@ -889,6 +960,34 @@ export function getAllData() {
     records: getCheckinRecords(),
     todos: getTodos(),
   };
+}
+
+/* ==================== 快照（桌面版落盘 / 云端同步的载荷） ==================== */
+
+/** 组装当前 localStorage 里的全量快照；updatedAt 是同步比对的依据 */
+export function buildSnapshot() {
+  const snap = getAllData();
+  return { ...snap, updatedAt: snap.exportDate };
+}
+
+/**
+ * 把一份快照直写进 localStorage，并且**不**通知订阅者：
+ * 启动回填时文件已是权威数据，云端拉取时主进程也已写好文件，
+ * 再触发一次落盘只会把刚下载的数据用新时间戳回写、引发多余推送。
+ * @returns {boolean} 是否应用成功
+ */
+export function applySnapshot(snap) {
+  if (!snap || !snap.exportDate) return false;
+  try {
+    localStorage.setItem(STORAGE_KEYS.CHECKIN_ITEMS, JSON.stringify(Array.isArray(snap.items) ? snap.items : []));
+    localStorage.setItem(STORAGE_KEYS.CHECKIN_RECORDS, JSON.stringify(snap.records && typeof snap.records === 'object' ? snap.records : {}));
+    localStorage.setItem(STORAGE_KEYS.TODOS, JSON.stringify(Array.isArray(snap.todos) ? snap.todos : []));
+    localStorage.setItem(STORAGE_KEYS.SCHEMA_VERSION, String(snap.schemaVersion || SCHEMA_VERSION));
+    return true;
+  } catch (e) {
+    console.error('applySnapshot failed:', e);
+    return false;
+  }
 }
 
 /**

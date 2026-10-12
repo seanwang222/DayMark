@@ -26,8 +26,8 @@ import {
   pushNow,
   pullNow,
   onSyncStatus,
-  applySnapshot,
 } from '../utils/persistence';
+import { applySnapshot } from '../utils/storage';
 
 const CARD_BG = '#161b22';
 const BORDER = '#30363d';

@@ -18,7 +18,26 @@ import {
   setAllData,
   TODO_PRIORITIES,
 } from './storage';
-import { downloadFile } from './export';
+
+/* ==================== 文件下载 ==================== */
+
+/**
+ * 触发浏览器/WebView 下载
+ * @param {string} content
+ * @param {string} filename
+ * @param {string} mimeType
+ */
+export function downloadFile(content, filename, mimeType) {
+  const blob = new Blob([content], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
 
 /* ==================== 区块与表头定义 ==================== */
 
@@ -38,8 +57,26 @@ const TODO_HEADERS = [
 
 /* ==================== CSV 基础 ==================== */
 
+/**
+ * 电子表格公式注入护栏：以 = + - @ 或制表符开头的单元格，Excel 会当公式/DDE 执行。
+ * 备份 CSV 的内容可能来自另一台设备或一份别人给的备份文件，属于跨信任边界，
+ * 因此导出时前置单引号使其退化为纯文本（Excel 里会看到这个撇号，是有意为之）。
+ * parseCSV 读回时会脱掉同一层护栏，DayMark 自身的导出→导入往返不受影响
+ * （唯一例外：内容本身就以 `'= ` 这类「撇号+公式符」开头，会被当成护栏少一个撇号）。
+ */
+const FORMULA_LEAD_RE = /^[=+\-@\t]/;
+
+function guardFormulaCell(s) {
+  return FORMULA_LEAD_RE.test(s) ? `'${s}` : s;
+}
+
+function unguardCell(s) {
+  return s[0] === "'" && FORMULA_LEAD_RE.test(s.slice(1)) ? s.slice(1) : s;
+}
+
 function csvCell(value) {
-  const s = value == null ? '' : String(value);
+  const raw = value == null ? '' : String(value);
+  const s = guardFormulaCell(raw);
   if (s.includes(',') || s.includes('"') || s.includes('\n') || s.includes('\r')) {
     return '"' + s.replace(/"/g, '""') + '"';
   }
@@ -86,7 +123,8 @@ function parseCSV(text) {
     row.push(cell);
     rows.push(row);
   }
-  return rows;
+  // 脱掉导出时加的公式护栏，保证「导出 → 导入」拿到原文
+  return rows.map((r) => r.map(unguardCell));
 }
 
 function pad2(n) {

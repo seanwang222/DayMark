@@ -16,6 +16,8 @@ import path from 'node:path';
 
 const DEFAULT_BASE = 'https://dav.jianguoyun.com/dav/';
 const DEFAULT_DIR = 'DayMark';
+/** 请求超时：没有超时时，网络半开会让界面永远停在「处理中…」 */
+export const REQUEST_TIMEOUT_MS = 20000;
 export const SNAPSHOT_FILENAME = 'daymark-snapshot.json';
 /** 备份文件名前缀匹配：daymark-snapshot.conflict-*.json（被覆盖的本地）/ .cloud-*.json（被覆盖的云端） */
 export const BACKUP_NAME_RE = /^daymark-snapshot\.(conflict|cloud)-[\dT-]+\.json$/;
@@ -25,29 +27,46 @@ function b64(str) {
 }
 
 /**
+ * 逐段编码 WebDAV 路径：坚果云目录名允许空格、#、中文等字符，
+ * 不编码会让 URL 变形（空格截断、# 之后被当片段），表现为莫名的 404。
+ */
+export function encodeWebdavPath(dir) {
+  return String(dir)
+    .replace(/^\/+|\/+$/g, '')
+    .split('/')
+    .filter((s) => s !== '')
+    .map(encodeURIComponent)
+    .join('/');
+}
+
+/**
  * 把本地路径拼成完整的 WebDAV URL
  */
 export function buildRemoteUrl({ baseUrl = DEFAULT_BASE, dir = DEFAULT_DIR, fileName = SNAPSHOT_FILENAME }) {
   const base = baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`;
-  const d = String(dir).replace(/^\/+|\/+$/g, '');
-  const segments = d ? [d, fileName] : [fileName];
-  return `${base}${segments.join('/')}`;
+  const d = encodeWebdavPath(dir);
+  const name = encodeURIComponent(fileName);
+  return d ? `${base}${d}/${name}` : `${base}${name}`;
 }
 
 /**
  * 执行一次 WebDAV HTTP 请求
  * @returns {Promise<{status:number, body?:string, text?:string}>}
  */
-export async function webdavRequest({ url, method = 'GET', auth, body }) {
+export async function webdavRequest({ url, method = 'GET', auth, body, timeoutMs = REQUEST_TIMEOUT_MS }) {
   const headers = { Authorization: `Basic ${b64(`${auth.account}:${auth.password}`)}` };
   if (body !== undefined) headers['Content-Type'] = 'application/json';
+  let res;
   try {
-    const res = await fetch(url, { method, headers, body });
-    const text = await res.text().catch(() => '');
-    return { status: res.status, body: text };
+    res = await fetch(url, { method, headers, body, signal: AbortSignal.timeout(timeoutMs) });
   } catch (err) {
+    if (err && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
+      throw new Error(`${method} 超时：${Math.round(timeoutMs / 1000)} 秒内未响应，请检查网络或 WebDAV 地址`);
+    }
     throw new Error(`网络请求失败：${err && err.message ? err.message : String(err)}`);
   }
+  const text = await res.text().catch(() => '');
+  return { status: res.status, body: text };
 }
 
 /**
@@ -153,7 +172,10 @@ export class Jianguoyun {
   constructor({ account, password, dir = DEFAULT_DIR, fileName = SNAPSHOT_FILENAME, baseUrl = DEFAULT_BASE }) {
     this.auth = { account, password };
     this.url = buildRemoteUrl({ baseUrl, dir, fileName });
-    this.dirUrl = (baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`) + String(dir).replace(/^\/+|\/+$/g, '');
+    const base = baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`;
+    const encodedDir = encodeWebdavPath(dir);
+    // 备份文件与主快照同目录，dirUrl 结尾不带斜杠
+    this.dirUrl = encodedDir ? `${base}${encodedDir}` : base.replace(/\/$/, '');
   }
 
   /** 同目录下的备份文件地址（不新建子目录，免去二次 MKCOL） */

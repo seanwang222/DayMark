@@ -10,7 +10,7 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
-import { Jianguoyun, resolveLatest, planPull, planPush, backupFileName, pruneBackups, SNAPSHOT_FILENAME, BACKUP_NAME_RE } from '../electron/webdav.js';
+import { Jianguoyun, resolveLatest, planPull, planPush, backupFileName, pruneBackups, webdavRequest, buildRemoteUrl, encodeWebdavPath, SNAPSHOT_FILENAME, BACKUP_NAME_RE } from '../electron/webdav.js';
 
 /* ==================== mock 坚果云服务 ==================== */
 
@@ -28,6 +28,12 @@ function startMockServer() {
       const auth = req.headers.authorization || '';
       const url = new URL(req.url, 'http://127.0.0.1');
       const p = url.pathname;
+
+      // 模拟网络半开：收下请求但永不返回，用于验证超时而不是无限挂起
+      if (p.startsWith('/dav/Hang/')) {
+        req.resume();
+        return;
+      }
 
       const send = (code, body) => {
         res.statusCode = code;
@@ -134,6 +140,33 @@ function t() {
   assert.equal(backupFileName('cloud', '2026-10-08T17:30:45.123Z'), 'daymark-snapshot.cloud-2026-10-08T17-30-45.json');
   assert.ok(!SNAPSHOT_FILENAME.match(BACKUP_NAME_RE), '主快照文件绝不能被清理规则命中');
   console.log('OK: 备份文件名合法且与主快照可区分');
+}
+
+/* ==================== 目录名的 URL 段编码 ==================== */
+
+{
+  const BASE = 'https://dav.jianguoyun.com/dav/';
+  // 裸空格会截断 HTTP 请求行，裸 # 之后的部分被当成片段 → 莫名的 404 / 传到别处
+  assert.equal(
+    buildRemoteUrl({ baseUrl: BASE, dir: 'My DayMark' }),
+    'https://dav.jianguoyun.com/dav/My%20DayMark/daymark-snapshot.json',
+    '空格应被编码',
+  );
+  const odd = new Jianguoyun({ account: USER, password: PASS, dir: '备份 2026/Q1#1', baseUrl: BASE });
+  assert.ok(!odd.url.includes(' '), `URL 里不应有裸空格: ${odd.url}`);
+  assert.ok(!odd.url.includes('#'), `URL 里不应有裸井号: ${odd.url}`);
+  assert.equal(
+    decodeURIComponent(odd.url.slice(BASE.length)),
+    '备份 2026/Q1#1/daymark-snapshot.json',
+    '编码后应能还原成原目录路径',
+  );
+  assert.equal(decodeURIComponent(odd.dirUrl.slice(BASE.length)), '备份 2026/Q1#1');
+  // 备份文件与主快照同目录，且同样不受裸字符影响
+  const bk = odd.urlFor('daymark-snapshot.cloud-2026-10-08T17-30-45.json');
+  assert.ok(bk.startsWith(odd.dirUrl + '/'), '备份文件应与主快照同目录');
+  assert.equal(encodeWebdavPath('/DayMark/'), 'DayMark', '首尾斜杠应被去掉');
+  assert.equal(new Jianguoyun({ account: 'a', password: 'b', dir: 'DayMark' }).url, BASE + 'DayMark/daymark-snapshot.json', '常规目录名不应被改变');
+  console.log('OK: 目录名按 URL 段编码，空格 / # / 中文不再拼坏地址');
 }
 
 function pruneFixture() {
@@ -243,6 +276,18 @@ async function run() {
   const afterMain = await bkClient.pull();
   assert.deepEqual(afterMain.data, staleRemote, '写备份不应改动主快照文件');
   console.log('OK: 云端备份写入独立文件，主快照不受影响');
+
+  // 8. 请求超时：服务端收下请求却永不返回时，应在设定时间内报错，而不是无限挂起
+  const hangClient = new Jianguoyun({ account: USER, password: PASS, dir: 'Hang', baseUrl });
+  const t0 = Date.now();
+  try {
+    await webdavRequest({ url: hangClient.url, method: 'GET', auth: hangClient.auth, timeoutMs: 300 });
+    assert.fail('挂起的服务端不应成功');
+  } catch (err) {
+    assert.match(err.message, /超时/, `超时应给出可读错误，实际: ${err.message}`);
+  }
+  assert.ok(Date.now() - t0 < 5000, `超时应尽快返回，实际耗时 ${Date.now() - t0}ms`);
+  console.log('OK: 无响应的服务端请求按超时中断并给出可读错误');
 
   mockServer.close();
 
