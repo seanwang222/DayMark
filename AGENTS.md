@@ -6,9 +6,9 @@ DayMark（React 18 + Vite 4 渲染层，Electron 44 桌面层）的协作约定�
 
 ## 0. 动手前
 
-- **改数据/同步相关代码前先跑 `npm run verify`**（六套，见 README 脚本表）；改完再跑一次。任一套失败就不要提交。装好本地钩子可以省掉这一步：`npm run hooks:install` 后每次 commit 自动跑（绕过：`--no-verify`）。
+- **改数据/同步相关代码前先跑 `npm run verify`**（六套，见 README 脚本表）；改完再跑一次。任一套失败就不要提交。钩子在 `npm install` 时由 package.json 的 `prepare` 自动装好（也可手动 `npm run hooks:install`），之后每次 commit 都会跑；依赖没装时钩子会拦住提交而不是放行（绕过：`--no-verify`）。
 - 涉及渲染层或主进程的时序改动，另跑 `npm run build:standalone` 确认打包链没断。
-- 本仓库是 **GitHub 公开仓库**（`origin` = `https://github.com/wangsichen222/DayMark`，默认分支 `master`），推送即发布。公开历史撤回不掉，所以**任何提交都不许带用户数据、坚果云凭据、`userData` 下的快照、`.workbuddy/memory/` 本机笔记或一次性改写脚本**——它们已在 `.gitignore` 里，别用 `git add -f` 绕过。
+- 本仓库是 **GitHub 公开仓库**（`origin` = `https://github.com/wangsichen222/DayMark`，默认分支 `master`），推送即发布，公开历史撤回不掉。**`.workbuddy/` 下除 `verify-*.mjs` 之外的一切默认被忽略**（本机笔记、一次性改写脚本、verify 打包结果），新写的一次性脚本天然进不了提交；`userData` 里的快照与坚果云凭据物理上在仓库外（`%APPDATA%\daily-checkin-app\`），不要把它们复制进仓库再提交。任何情况下都不要用 `git add -f` 绕过忽略规则。
 - 提交身份固定为 GitHub noreply 邮箱 `59314215+wangsichen222@users.noreply.github.com`，避免真实邮箱进公开历史。本机全局 git 身份是空值，因此提交要显式 `git -c user.name="Sichen Wang" -c user.email="59314215+wangsichen222@users.noreply.github.com" commit`。
 - 不要调用真实坚果云账号。同步类验证一律走 `.workbuddy/verify-webdav.mjs` 里的本地 mock 服务。
 - 启动 Electron GUI（`DAYMARK_SMOKE` / `electron:dev`）会打开真实窗口并读写 `%APPDATA%\daily-checkin-app\` 下的用户数据，需人工确认后再执行。冒烟模式已把 `userData` 重定向到临时目录，但仍属 GUI 操作。主进程带单实例锁，第二次启动只会把已有窗口调到前台。

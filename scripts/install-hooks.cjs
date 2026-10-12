@@ -17,8 +17,10 @@ try {
   hooksDir = execFileSync('git', ['rev-parse', '--git-path', 'hooks'], { cwd: repoRoot, encoding: 'utf8' }).trim();
   if (!path.isAbsolute(hooksDir)) hooksDir = path.join(repoRoot, hooksDir);
 } catch (e) {
-  console.error('无法定位 git hooks 目录（当前目录不是 git 仓库？）:', e.message);
-  process.exit(1);
+  // 作为 npm prepare 生命周期脚本被调用时，非 git 环境（打包安装、CI 检出 tarball 等）
+  // 属正常情况；这里报错退出会让整个 npm install 失败。
+  console.warn('[hooks] 未找到 git hooks 目录，跳过安装（不影响依赖安装）:', e.message);
+  process.exit(0);
 }
 
 fs.mkdirSync(hooksDir, { recursive: true });

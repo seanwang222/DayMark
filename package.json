@@ -11,6 +11,7 @@
     "build:standalone": "vite build && node build-standalone.cjs",
     "electron:dev": "node scripts/electron-dev.mjs",
     "hooks:install": "node scripts/install-hooks.cjs",
+    "prepare": "node scripts/install-hooks.cjs",
     "build:electron": "vite build && node build-standalone.cjs && node -e \"require('fs').copyFileSync('dist/index-standalone.html','index-standalone.html');console.log('root index-standalone.html updated')\" && electron-builder --win",
     "verify:backup": "esbuild .workbuddy/verify-backup.mjs --bundle --platform=node --format=esm --outfile=.workbuddy/verify-bundle.mjs --log-level=warning && node .workbuddy/verify-bundle.mjs",
     "verify:stats": "esbuild .workbuddy/verify-stats.mjs --bundle --platform=node --format=esm --outfile=.workbuddy/verify-stats-bundle.mjs --log-level=warning && node .workbuddy/verify-stats-bundle.mjs",

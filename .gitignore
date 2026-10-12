@@ -8,15 +8,13 @@ archive/
 index-standalone.html
 shots/
 
-# verify 脚本的临时打包结果（源文件 verify-*.mjs 仍需入库）
+# .workbuddy 下默认全部不入库：本机开发笔记、一次性改写脚本、verify 的临时打包结果。
+# 只把回归入口 verify-*.mjs 显式放回，这样新写的一次性脚本天然进不了提交。
+# 再往后一条是必须的：verify-*.mjs 会连 esbuild 产物 verify-*-bundle.mjs 一起放回，
+# 靠后置规则覆盖前面的规则把它再压掉（顺序反过来就失效）。
+.workbuddy/*
+!.workbuddy/verify-*.mjs
 .workbuddy/*-bundle.mjs
-
-# 本机开发笔记与一次性改写脚本（不入库；verify-*.mjs 是回归入口，仍跟踪）
-.workbuddy/memory/
-.workbuddy/fix-radius.mjs
-.workbuddy/retheme.mjs
-.workbuddy/revert-theme.mjs
-.workbuddy/unify-radius.mjs
 
 # 本地数据与日志
 *.log

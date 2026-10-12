@@ -1,11 +1,12 @@
 #!/bin/sh
 # 提交前质量门：跑全量回归校验（六套 verify），任一失败就阻止提交。
 # 临时绕过：git commit --no-verify
-# 安装方式：npm run hooks:install
+# 安装方式：npm install 时由 package.json 的 prepare 自动装好；也可手动 npm run hooks:install
 
 if [ ! -d node_modules ]; then
-  echo "[pre-commit] 未安装依赖，跳过 verify（先 npm install）"
-  exit 0
+  echo "[pre-commit] 未安装依赖，无法校验。先跑 npm install（钩子会在装完依赖后自动就位）。"
+  echo "[pre-commit] 已阻止提交；确需跳过用 git commit --no-verify"
+  exit 1
 fi
 
 npm run verify

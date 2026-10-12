@@ -55,7 +55,7 @@ DayMark 是一款本地优先（数据不出本机）的日常管理工具，帮
 npm install          # 安装依赖
 npm run dev          # 启动 Vite 开发服务器（http://localhost:3000）
 npm run electron:dev # 以 Electron 桌面模式开发调试（自动起 dev server）
-npm run hooks:install # 装本地提交前钩子：每次 commit 前自动跑 npm run verify
+npm run hooks:install # 手动补装提交前钩子（npm install 时已自动装好）：每次 commit 前自动跑 npm run verify
 ```
 
 > Electron 开发模式启动后，本地数据通过主进程落盘（`daymark-snapshot.json`），而非浏览器 localStorage。
@@ -72,7 +72,7 @@ npm run hooks:install # 装本地提交前钩子：每次 commit 前自动跑 np
 | `npm run build`            | 构建 Web 版到 `dist/`                      |
 | `npm run build:standalone` | 构建并合并为单文件 `dist/index-standalone.html` |
 | `npm run build:electron`   | 完整构建并打包桌面版（NSIS 安装包 + 便携版）             |
-| `npm run hooks:install`    | 安装提交前自动跑 verify 的本地 git 钩子                |
+| `npm run hooks:install`    | 手动补装提交前跑 verify 的本地 git 钩子（`npm install` 已自动装好） |
 | `npm run verify`           | 全量回归校验（下列六套依次跑完，任一套失败即整体失败）            |
 | `verify:backup`            | CSV / JSON 备份与恢复的往返一致性、公式注入护栏            |
 | `verify:stats`             | 打卡统计口径（单项目 / 多项聚合 / 连续天数）                |
