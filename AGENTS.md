@@ -4,6 +4,8 @@ DayMark（React 18 + Vite 4 渲染层，Electron 44 桌面层）的协作约定�
 
 用户可读的完整说明在 **README.md**（功能、安装、WebDAV 配置与同步机制、数据存储位置）。本文件只记录改代码前必须知道的约束与验证入口，不重复 README 的内容。
 
+改数据路径前先读 **`docs/architecture/`**：`persistence.md`（落盘时序）、`sync.md`（同步链路与冲突决策）、`stats.md`（统计口径）都带 `文件:行号` 的事实来源，以及一份与代码冲突时以代码为准的「已知差异」清单——下面的条目是那些文档的摘要。
+
 ## 0. 动手前
 
 - **改数据/同步相关代码前先跑 `npm run verify`**（六套，见 README 脚本表）；改完再跑一次。任一套失败就不要提交。钩子在 `npm install` 时由 package.json 的 `prepare` 自动装好（也可手动 `npm run hooks:install`），之后每次 commit 都会跑；依赖没装时钩子会拦住提交而不是放行（绕过：`--no-verify`）。

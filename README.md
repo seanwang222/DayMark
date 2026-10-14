@@ -197,8 +197,9 @@ DayMark/
 │   ├── preload.cjs       # 安全桥接 window.daymark API
 │   ├── config.js         # daymark-config.json 读写（纯 Node，可脱离 Electron 测试）
 │   └── webdav.js         # 坚果云 WebDAV 同步核心
-├── .workbuddy/           # verify-*.mjs 回归校验脚本与开发笔记
+├── .workbuddy/           # verify-*.mjs 回归校验脚本（本机开发笔记同放此处，但不入库）
 ├── scripts/              # 开发辅助脚本（含 git-hooks 提交前钩子）
+├── docs/architecture/    # 落盘时序 / 同步链路 / 统计口径的设计说明，改数据路径前先读
 ├── dist/                 # Web 构建产物（可再生）
 ├── release/              # 桌面打包产物（安装包 / 便携版 / win-unpacked）
 ├── archive/              # 历史产物归档（旧版本构建）
