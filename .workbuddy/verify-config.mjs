@@ -151,6 +151,27 @@ try {
   assert.equal(kept.password || '', '', '保留密文时不应写入明文');
   assert.equal(readConfig(cdir, codec).password, 's3cret-app-pass', '保留的密文应仍可解回');
 
+  // 同样的"本次没有新明文"场景，但 codec 可用 —— 老实现走的是加密分支，
+  // 会把 passwordEnc 直接写成空串，密码就此消失，之后每次同步都只能拿到 401
+  writeConfig(cdir, { ...legacy, password: '', syncedAt: '2026-10-17 00:00:00' }, codec);
+  const keptOn = JSON.parse(fs.readFileSync(configFile(cdir), 'utf8'));
+  assert.ok(keptOn.passwordEnc, 'codec 可用且明文为空时同样要保留盘上密文');
+  assert.equal(keptOn.password || '', '', '保留密文时不应写入明文');
+  assert.equal(keptOn.syncedAt, '2026-10-17 00:00:00', '其它字段应照常落盘');
+  assert.equal(readConfig(cdir, codec).password, 's3cret-app-pass', '保留下来的密文仍应解回原密码');
+  console.log('OK: 明文为空时即使加密可用也不抹掉密文（这正是"每次都 401"的成因之一）');
+
+  // 盘上只剩旧版明文、本次又不带明文 → 顺手迁成密文，而不是把密码丢掉
+  fs.writeFileSync(configFile(cdir), JSON.stringify({ ...cfgWithPlain }), 'utf8');
+  writeConfig(cdir, { ...cfgWithPlain, password: '', autoSync: true }, codec);
+  const migrated = JSON.parse(fs.readFileSync(configFile(cdir), 'utf8'));
+  assert.ok(migrated.passwordEnc, '旧明文应被迁成密文而不是随空密码一起消失');
+  assert.equal(migrated.password || '', '', '迁移后不应再留明文');
+  assert.ok(!fs.readFileSync(configFile(cdir), 'utf8').includes('s3cret-app-pass'), '迁移后的文件里不应有明文密码');
+  assert.equal(migrated.autoSync, true, '本次提交的其它字段应生效');
+  assert.equal(readConfig(cdir, codec).password, 's3cret-app-pass', '迁移后仍能解回原密码');
+  console.log('OK: 旧明文 + 本次空明文 → 自动迁成密文并保持原密码');
+
   // 密文 + 用户重新输入的明文：以新明文为准覆盖密文
   writeConfig(cdir, { ...legacy, password: 'new-pass' }, codec);
   assert.equal(readConfig(cdir, codec).password, 'new-pass', '新密码应覆盖旧密文');

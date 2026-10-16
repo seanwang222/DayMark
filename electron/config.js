@@ -93,16 +93,33 @@ export function writeConfig(dir, cfg, codec) {
   const out = { ...DEFAULT_CONFIG, ...cfg };
   const plain = typeof out.password === 'string' ? out.password : '';
   delete out.passwordEnc;
-  if (canEncrypt(codec)) {
-    out.passwordEnc = plain ? codec.encrypt(plain) : '';
-    out.password = '';
-  } else if (plain) {
-    out.password = plain; // 系统钥匙串不可用（如无 keyring 的 Linux）才留在明文
+  if (plain) {
+    if (canEncrypt(codec)) {
+      out.passwordEnc = codec.encrypt(plain);
+      out.password = '';
+    } else {
+      out.password = plain; // 系统钥匙串不可用（如无 keyring 的 Linux）才留在明文
+    }
   } else {
-    // 内存里没有明文：保留盘上已有密文，别让一次 syncedAt 更新就把还能解的密码抹掉
+    // 内存里没有明文＝「保持原密码」。这里必须回头读盘上那一份，否则一次「只更新 syncedAt」
+    // 或「只改自动同步开关」的写入就会把还能用的密码抹成空 —— 用户被迫重填，
+    // 而重填时最容易填成登录密码，之后的同步就永远停在 401。
     const prev = readRawConfig(dir);
-    out.passwordEnc = (prev && prev.passwordEnc) || '';
-    out.password = '';
+    const prevEnc = (prev && prev.passwordEnc) || '';
+    const prevPlain = (prev && prev.password) || '';
+    if (prevEnc) {
+      out.passwordEnc = prevEnc;
+      out.password = '';
+    } else if (prevPlain) {
+      if (canEncrypt(codec)) {
+        out.passwordEnc = codec.encrypt(prevPlain); // 旧明文顺手迁移成密文
+        out.password = '';
+      } else {
+        out.password = prevPlain;
+      }
+    } else {
+      out.password = '';
+    }
   }
   if (!out.passwordEnc) delete out.passwordEnc;
 

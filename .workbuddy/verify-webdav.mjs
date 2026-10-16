@@ -10,7 +10,7 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
-import { Jianguoyun, resolveLatest, planPull, planPush, backupFileName, pruneBackups, webdavRequest, buildRemoteUrl, encodeWebdavPath, SNAPSHOT_FILENAME, BACKUP_NAME_RE } from '../electron/webdav.js';
+import { Jianguoyun, resolveLatest, planPull, planPush, backupFileName, pruneBackups, webdavRequest, buildRemoteUrl, encodeWebdavPath, describeAuthFailure, SNAPSHOT_FILENAME, BACKUP_NAME_RE } from '../electron/webdav.js';
 
 /* ==================== mock 坚果云服务 ==================== */
 
@@ -46,6 +46,8 @@ function startMockServer() {
       };
 
       if (auth !== goodAuth) {
+        // 真实服务器在 401 上会带 WWW-Authenticate，用它来区分"地址对不对"与"密码对不对"
+        res.setHeader('WWW-Authenticate', 'Basic realm="Jianguoyun WebDAV"');
         send(401, { error: 'unauthorized' });
         return;
       }
@@ -228,8 +230,33 @@ async function run() {
     assert.fail('错误密码不应成功');
   } catch (err) {
     assert.match(err.message, /认证失败/, `401 应报认证失败，实际: ${err.message}`);
+    // 诊断三要素：账号（打码）+ 密码形态 + 服务器质询，让用户自己就能看出填错哪一格
+    assert.match(err.message, /u\*\*\*@example\.com/, `401 应给出打码后的账号，实际: ${err.message}`);
+    assert.match(err.message, /5 位，不像坚果云的应用密码/, `短密码应点出"不像应用密码"，实际: ${err.message}`);
+    assert.match(err.message, /realm="Jianguoyun WebDAV"/, `401 应带上服务器质询，实际: ${err.message}`);
+    assert.ok(!err.message.includes('wrong'), '401 提示绝不能回显密码明文');
   }
-  console.log('OK: 认证失败（401）正确报错');
+
+  // 3b. 形态正确的 16 位密码仍被拒 → 提示应转向"账号错或应用密码已被删除"
+  const shapedClient = new Jianguoyun({ account: USER, password: 'A1b2C3d4E5f6G7h8', dir: 'DayMark', baseUrl });
+  try {
+    await shapedClient.pull();
+    assert.fail('错误密码不应成功');
+  } catch (err) {
+    assert.match(err.message, /16 位，符合应用密码格式/, `16 位密码应给出"格式正确"分支的提示，实际: ${err.message}`);
+    assert.match(err.message, /已被删除/, `应提示可能是应用密码被删除，实际: ${err.message}`);
+    assert.ok(!err.message.includes('A1b2C3d4E5f6G7h8'), '提示绝不能回显 16 位应用密码');
+  }
+
+  // 3c. describeAuthFailure 是纯函数：空密码、非默认地址各自成句
+  const emptyPw = describeAuthFailure({ account: 'a@b.com', password: '', server: 'https://dav.jianguoyun.com/dav/' });
+  assert.match(emptyPw, /密码为空（本机没存到应用密码）/);
+  assert.match(emptyPw, /地址：默认坚果云/);
+  const customServer = describeAuthFailure({ account: 'a@b.com', password: 'x'.repeat(16), server: 'http://192.168.1.9/dav/' });
+  assert.match(customServer, /不是默认坚果云地址/);
+  const notEmail = describeAuthFailure({ account: 'myname', password: 'y'.repeat(16) });
+  assert.match(notEmail, /不是邮箱格式/);
+  console.log('OK: 认证失败（401）正确报错，并给出账号打码 / 密码形态 / 服务器质询的可诊断说明且不回显密码');
 
   // 4. 文件名错误 → 404 → data null
   const emptyClient = new Jianguoyun({ account: USER, password: PASS, dir: 'NotFoundDir', baseUrl });

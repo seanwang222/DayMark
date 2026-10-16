@@ -36,12 +36,13 @@ DayMark（React 18 + Vite 4 渲染层，Electron 44 桌面层）的协作约定�
 
 - 配置读写全部经 `electron/config.js`（纯 Node，可脱离 Electron 测试）。规则：空密码表示保持原密码；`syncedAt` 只由主进程维护，不接受界面输入；`publicConfig()` 回显时抹掉密码。新增配置字段时，`DEFAULT_CONFIG`、`readConfig`、`mergeConfigInput` 三处都要补，否则字段会被静默丢弃（「WebDAV 服务器」字段就踩过这个坑）。
 - 应用密码不落明文：`readConfig` / `writeConfig` 的第三个参数接收 codec（主进程注入 Electron `safeStorage`，Windows 下绑定当前用户账户），可用时密文存进 `passwordEnc`，`cfg.password` 只在内存里流转。config.js 本身不许 import electron；换机器导致解不开时按「未配置」处理，不要拿乱码去同步。回归用假 codec 跑 `verify:config`。
+- **`writeConfig` 在「本次没有明文」时必须回头读盘保住已有密码**（密文优先，只有旧明文则迁成密文）。过去只有 codec 不可用的分支做这件事，加密可用 + 空明文会把 `passwordEnc` 写成空串——一次「只更新 syncedAt」或「只改自动同步开关」就让用户从此每次同步都 401。界面那条「留空即保持原密码」的规则靠这里兜底，改动务必跑 `verify:config`。
 - WebDAV 路径按 URL 段编码（`encodeWebdavPath` / `buildRemoteUrl`）。新增任何拼接远端地址的地方都走这两个函数，否则含空格、中文、`#` 的目录名会莫名 404。
 - 主进程持 `requestSingleInstanceLock`：安装版与便携版共用同一 userData，双开会互相盖写快照文件。新增启动逻辑要放在拿到锁之后。
 - 渲染层与主进程只通过 `electron/preload.cjs` 暴露的 `window.daymark` 通信。`beforeunload` 兜底必须走同步通道 `saveSnapshotSync`（`invoke` 是异步的，`beforeunload` 等不到返回）。
 - 同一时刻只允许一个同步任务（`withSyncLock`）。新增同步入口请包在锁里，并考虑「锁被占用时重新排期」而不是丢弃。
 - **读本机快照必须在 `await` 网络之后**（`runSync` / push-now / pull-now 都是这个顺序）。一次同步要「读本地 + 读云端」，先读本地再等云端那 20 秒，等待期间的用户改动就已落盘，拿旧快照去决策会把新数据无备份地盖掉。锁只互斥同步之间，管不到渲染层落盘。
-- 所有 WebDAV 请求带 20 秒超时；错误要经 `describeHttpError` 转成用户能懂的中文提示。
+- 所有 WebDAV 请求带 20 秒超时；错误要经 `describeHttpError` 转成用户能懂的中文提示。401 额外拼上 `describeAuthFailure` 的诊断尾巴（打码账号、**密码位数形态**、是否默认坚果云地址、`WWW-Authenticate` 质询）——「每次都 401」靠这一句才能自证是密码填错还是地址填错；**这里绝不能回显密码明文**，`verify:webdav` 锁住了这条。
 
 ## 3. 构建与依赖约定
 

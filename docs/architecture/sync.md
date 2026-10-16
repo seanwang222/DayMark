@@ -116,28 +116,31 @@ sequenceDiagram
 
 | 规则 | 实现 |
 |---|---|
-| 界面密码留空 = 保持原密码 | `mergeConfigInput` `:123-126`，非空才 `trim()` 覆盖 |
-| `syncedAt` 不接受界面输入 | `mergeConfigInput` 返回对象里没有 `syncedAt`，只从 `...current` 继承（`:119-130`） |
-| 界面输入一律 `trim()`，`dir` 空则回落 `DayMark` | `:122-129` |
-| 回显抹掉密码 | `publicConfig` `:138-141` 解构扔掉 `password` / `passwordEnc`，只给 `passwordSet: !!password` |
-| 是否算「配好了云」 | `hasCloudConfig` `:133-135` 要求 `account && password` 都非空 |
-| 密文落盘 | `writeConfig` `:96-99`：codec 可用时写 `passwordEnc`（base64）并把 `password` 置空 |
+| 界面密码留空 = 保持原密码 | `mergeConfigInput` `:140-143`，非空才 `trim()` 覆盖 |
+| `syncedAt` 不接受界面输入 | `mergeConfigInput` 返回对象里没有 `syncedAt`，只从 `...current` 继承（`:136-147`） |
+| 界面输入一律 `trim()`，`dir` 空则回落 `DayMark` | `:139-145` |
+| 回显抹掉密码 | `publicConfig` `:155-158` 解构扔掉 `password` / `passwordEnc`，只给 `passwordSet: !!password` |
+| 是否算「配好了云」 | `hasCloudConfig` `:150-152` 要求 `account && password` 都非空 |
+| 密文落盘 | `writeConfig` `:96-102`：有明文且 codec 可用时写 `passwordEnc`（base64）并把 `password` 置空 |
+| **本次没有明文时绝不能抹掉已有密码** | `writeConfig` `:103-123`：回头读盘，优先保留 `passwordEnc`，只有旧明文时顺手迁成密文（`:113-116`）。老实现只在 codec 不可用的分支做保留，**加密可用 + 空明文会把密文写成空串**，用户被迫重填、重填时常填成登录密码，之后每次同步都停在 401 |
 | 内存里保留明文 | `readConfig` `:59-84`：优先解 `passwordEnc`，明文只在内存对象里流转 |
 | 解不开就视为未配置 | `:66-72`，宁可让用户重填，也不要拿乱码去同步再报一个看不懂的 401 |
-| 换机器/无 keyring 的降级 | codec 不可用时 `:99-106` 才退回明文；`main.js:61-71` 的 codec 由 Electron `safeStorage`（Windows DPAPI，绑当前用户账户）提供 |
-| 配置文件也是原子写 | `writeConfig` `:109-112` `.tmp` + `renameSync`，与主快照同一策略 |
+| 换机器/无 keyring 的降级 | codec 不可用时 `:100-101` / `:117-118` 才退回明文；`main.js:61-71` 的 codec 由 Electron `safeStorage`（Windows DPAPI，绑当前用户账户）提供 |
+| 配置文件也是原子写 | `writeConfig` `:126-129` `.tmp` + `renameSync`，与主快照同一策略 |
 
 **注意 `DEFAULT_CONFIG`、`readConfig`、`mergeConfigInput` 三处都要同步补字段**，否则新字段会被静默丢弃——「WebDAV 服务器」字段就踩过这个坑（`server` 必须一路贯通到 `buildRemoteUrl` 的 `baseUrl`，见 `main.js:106`）。
 
 ## 错误提示统一在 `describeHttpError`
 
-`webdav.js:75-82` 把状态码翻译成中文：`401` 认证失败（提示查账号与应用密码）、`403` 权限不足、`404` 文件/目录不存在、`405/409` 目标已存在或需先建目录、`507` 空间不足，其余 `失败（HTTP <code>）`。超时与网络错误在 `webdavRequest` 里就地翻译（`:62-67`）。`ensureDir` 把 `405/409/200/201` 都视为「目录已在」（`:192`）。`pull` 遇到 `404` 返回 `{status:404, data:null}` 而不是抛错（`:227`）；云端内容不是合法 JSON 时**中止导入**并明确说明「为防止覆盖」（`:231-236`）。
+`webdav.js:126-135` 把状态码翻译成中文：`401` 认证失败、`403` 权限不足、`404` 文件/目录不存在、`405/409` 目标已存在或需先建目录、`507` 空间不足，其余 `失败（HTTP <code>）`。超时与网络错误在 `webdavRequest` 里就地翻译（`:63-67`）。`ensureDir` 把 `405/409/200/201` 都视为「目录已在」（`:256`）。`pull` 遇到 `404` 返回 `{status:404, data:null}` 而不是抛错（`:291`）；云端内容不是合法 JSON 时**中止导入**并明确说明「为防止覆盖」（`:299`）。
+
+**401 额外带一句可诊断的尾巴**：`describeAuthFailure`（`:95-118`）纯函数，把「本机到底用了什么」写进错误里——打码后的账号（`maskAccount` `:78-84`，只留首字符与 `@` 之后的域）、**密码形态**（空 / 16 位符合应用密码格式 / 位数不对并提示去坚果云新建应用密码）、服务器地址是否为默认坚果云、以及响应头 `WWW-Authenticate` 的质询（`webdavRequest` 在 `:69-74` 捕获）。四个 `Jianguoyun` 方法只在 `status === 401` 时拼上它（`authDetail` `:236-243`）。**任何分支都不回显密码明文**，`verify:webdav` 有用例锁住这条。
 
 ## 回归
 
 ```bash
-npm run verify:webdav    # 协议语义、planPull/planPush、备份命名与 prune、超时、URL 编码
-npm run verify:config    # 配置字段贯通、空密码保持原值、syncedAt 不可改、密文与明文迁移
+npm run verify:webdav    # 协议语义、planPull/planPush、备份命名与 prune、超时、URL 编码、401 诊断（含"不回显密码"）
+npm run verify:config    # 配置字段贯通、空密码保持原值、syncedAt 不可改、密文与明文迁移、空明文不抹掉已有密文
 ```
 
 `.workbuddy/verify-webdav.mjs` 用本地 mock HTTP 服务模拟坚果云的 MKCOL/PUT/GET，**不触碰真实坚果云账号**。

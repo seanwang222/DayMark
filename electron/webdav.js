@@ -51,7 +51,7 @@ export function buildRemoteUrl({ baseUrl = DEFAULT_BASE, dir = DEFAULT_DIR, file
 
 /**
  * 执行一次 WebDAV HTTP 请求
- * @returns {Promise<{status:number, body?:string, text?:string}>}
+ * @returns {Promise<{status:number, body?:string, challenge?:string}>}
  */
 export async function webdavRequest({ url, method = 'GET', auth, body, timeoutMs = REQUEST_TIMEOUT_MS }) {
   const headers = { Authorization: `Basic ${b64(`${auth.account}:${auth.password}`)}` };
@@ -66,14 +66,67 @@ export async function webdavRequest({ url, method = 'GET', auth, body, timeoutMs
     throw new Error(`网络请求失败：${err && err.message ? err.message : String(err)}`);
   }
   const text = await res.text().catch(() => '');
-  return { status: res.status, body: text };
+  return {
+    status: res.status,
+    body: text,
+    // 401 时服务器用这个头说明"要哪种认证、针对哪个域"，是判断"地址填错 vs 密码填错"的关键线索
+    challenge: (res.headers && typeof res.headers.get === 'function' && res.headers.get('www-authenticate')) || '',
+  };
+}
+
+/** 账号打码：只留首字符与 @ 之后的域，够用户认出是不是自己那个邮箱 */
+function maskAccount(account) {
+  const s = String(account || '');
+  const at = s.indexOf('@');
+  if (at <= 0) return s ? `${s.slice(0, 1)}***（不是邮箱格式）` : '（空）';
+  return `${s.slice(0, 1)}***${s.slice(at)}`;
+}
+
+/** 压成单行、去掉控制字符并截断，避免把整段 HTML 错误页塞进界面 */
+function oneLine(s, max = 80) {
+  const t = String(s || '').replace(/[\s]+/g, ' ').trim();
+  return t.length > max ? `${t.slice(0, max)}…` : t;
+}
+
+/**
+ * 认证失败的可诊断说明（纯函数，绝不回显密码明文，只给形态）
+ * @param {{account?:string, password?:string, server?:string, challenge?:string}} info
+ */
+export function describeAuthFailure(info = {}) {
+  const parts = [];
+  const account = String(info.account || '');
+  const password = String(info.password || '');
+  const server = String(info.server || DEFAULT_BASE);
+
+  parts.push(`本机使用的账号：${maskAccount(account)}`);
+
+  if (!password) {
+    parts.push('密码为空（本机没存到应用密码）');
+  } else if (/^[A-Za-z0-9]{16}$/.test(password)) {
+    parts.push('密码 16 位，符合应用密码格式 —— 更可能是账号写错或该应用密码已被删除');
+  } else {
+    parts.push(`密码是 ${password.length} 位，不像坚果云的应用密码（16 位随机字母数字），请去坚果云网页「账户信息 → 安全选项 → 添加应用密码」新建一个并整串粘贴`);
+  }
+
+  const isDefaultBase = server === DEFAULT_BASE;
+  parts.push(isDefaultBase ? `地址：默认坚果云 ${DEFAULT_BASE}` : `地址：${oneLine(server, 120)}（不是默认坚果云地址，若你用的是坚果云请清空这一格）`);
+
+  const challenge = oneLine(info.challenge);
+  if (challenge) parts.push(`服务器质询：${challenge}`);
+
+  return parts.join('；');
 }
 
 /**
  * 解析服务端错误为可读信息
+ * @param {string} method
+ * @param {number} status
+ * @param {string} [detail] 认证类错误的补充诊断（describeAuthFailure 的产出）
  */
-export function describeHttpError(method, status) {
-  if (status === 401) return `${method} 认证失败：请检查 WebDAV 账号与应用密码`;
+export function describeHttpError(method, status, detail) {
+  if (status === 401) {
+    return `${method} 认证失败：请检查 WebDAV 账号与应用密码${detail ? `。${detail}` : ''}`;
+  }
   if (status === 403) return `${method} 权限不足：账号无权写入该路径`;
   if (status === 404) return `${method} 404：云端文件/目录不存在`;
   if (status === 409 || status === 405) return `${method} 409：目标已存在或需先创建目录`;
@@ -171,11 +224,22 @@ export function pruneBackups(dir, { keep = 10 } = {}) {
 export class Jianguoyun {
   constructor({ account, password, dir = DEFAULT_DIR, fileName = SNAPSHOT_FILENAME, baseUrl = DEFAULT_BASE }) {
     this.auth = { account, password };
+    this.baseUrl = baseUrl;
     this.url = buildRemoteUrl({ baseUrl, dir, fileName });
     const base = baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`;
     const encodedDir = encodeWebdavPath(dir);
     // 备份文件与主快照同目录，dirUrl 结尾不带斜杠
     this.dirUrl = encodedDir ? `${base}${encodedDir}` : base.replace(/\/$/, '');
+  }
+
+  /** 401 时把「本机到底用了什么」拼进错误信息；不含密码明文 */
+  authDetail(res) {
+    return describeAuthFailure({
+      account: this.auth.account,
+      password: this.auth.password,
+      server: this.baseUrl,
+      challenge: res && res.challenge,
+    });
   }
 
   /** 同目录下的备份文件地址（不新建子目录，免去二次 MKCOL） */
@@ -190,7 +254,7 @@ export class Jianguoyun {
     const res = await webdavRequest({ url: this.dirUrl, method: 'MKCOL', auth: this.auth });
     // 405/409 表示目录已存在，视为成功；401 等其它错误抛出
     if (res.status === 405 || res.status === 409 || res.status === 201 || res.status === 200) return;
-    throw new Error(describeHttpError('MKCOL', res.status));
+    throw new Error(describeHttpError('MKCOL', res.status, res.status === 401 ? this.authDetail(res) : ''));
   }
 
   /**
@@ -201,7 +265,7 @@ export class Jianguoyun {
     await this.ensureDir();
     const res = await webdavRequest({ url: this.url, method: 'PUT', auth: this.auth, body: jsonString });
     if (res.status < 200 || res.status >= 300) {
-      throw new Error(describeHttpError('PUT 上传', res.status));
+      throw new Error(describeHttpError('PUT 上传', res.status, res.status === 401 ? this.authDetail(res) : ''));
     }
   }
 
@@ -214,7 +278,7 @@ export class Jianguoyun {
     await this.ensureDir();
     const res = await webdavRequest({ url: this.urlFor(fileName), method: 'PUT', auth: this.auth, body: jsonString });
     if (res.status < 200 || res.status >= 300) {
-      throw new Error(describeHttpError('PUT 备份', res.status));
+      throw new Error(describeHttpError('PUT 备份', res.status, res.status === 401 ? this.authDetail(res) : ''));
     }
   }
 
@@ -226,7 +290,7 @@ export class Jianguoyun {
     const res = await webdavRequest({ url: this.url, method: 'GET', auth: this.auth });
     if (res.status === 404) return { status: 404, data: null };
     if (res.status < 200 || res.status >= 300) {
-      throw new Error(describeHttpError('GET 下载', res.status));
+      throw new Error(describeHttpError('GET 下载', res.status, res.status === 401 ? this.authDetail(res) : ''));
     }
     let data;
     try {
