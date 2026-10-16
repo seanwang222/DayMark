@@ -235,6 +235,11 @@ function DataManagerDialog({ open, onClose }) {
             value={overview.todoCount}
             sub={`已完成 ${overview.todoDone} 条`}
           />
+          <StatCard
+            label="临时任务"
+            value={overview.noteCount}
+            sub={`已完成 ${overview.noteDone} 条`}
+          />
         </Box>
         <Typography variant="caption" sx={{ color: FAINT, display: 'block', mt: 1 }}>
           记录日期范围：{dayRange}

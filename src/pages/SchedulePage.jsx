@@ -6,17 +6,24 @@ import {
   IconButton,
   Checkbox,
   Chip,
+  TextField,
 } from '@mui/material';
 import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import TodayIcon from '@mui/icons-material/Today';
 import EventIcon from '@mui/icons-material/Event';
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
+import ConfirmDialog from '../components/ConfirmDialog';
 import {
   getCheckinItems,
   getCheckinRecords,
   getTodos,
   getToday,
   getUpcomingPhases,
+  getQuickNotes,
+  addQuickNote,
+  toggleQuickNote,
+  deleteQuickNote,
   isPastDue,
   toggleCheckin,
   toggleTodo,
@@ -171,6 +178,84 @@ const ReminderRow = ({ item, onTogglePhase }) => {
   );
 };
 
+/** 某一天的临时任务：手动输入、勾选完成、删除前确认 */
+const QuickNotes = ({ dateStr, notes, onAdd, onToggle, onDelete }) => {
+  const [draft, setDraft] = useState('');
+  const [pending, setPending] = useState(null); // 等待确认删除的那条
+
+  const submit = () => {
+    const text = draft.trim();
+    if (!text) return;
+    onAdd(text);
+    setDraft('');
+  };
+
+  return (
+    <Box sx={{ borderTop: '1px solid #30363d', mt: 1, pt: 1.5 }}>
+      <Typography variant="caption" sx={{ color: '#8b949e', fontWeight: 700, fontSize: '0.8rem', display: 'block', mb: 0.3 }}>
+        临时（{notes.length}）
+      </Typography>
+      <Typography variant="caption" sx={{ color: '#484f58', fontSize: '0.7rem', display: 'block', mb: 0.8 }}>
+        记下 {dateStr} 要顺手处理的临时事项
+      </Typography>
+
+      <Box sx={{ display: 'flex', gap: 0.8, mb: 0.8 }}>
+        <TextField
+          size="small"
+          fullWidth
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); submit(); } }}
+          placeholder="输入临时任务，回车添加"
+          inputProps={{ maxLength: 200 }}
+          sx={{ '& .MuiOutlinedInput-input': { fontSize: '0.82rem', py: 0.9 } }}
+        />
+        <Button
+          size="small"
+          variant="outlined"
+          onClick={submit}
+          disabled={!draft.trim()}
+          sx={{ color: '#8b949e', borderColor: '#30363d', fontSize: '0.78rem', px: 1.5 }}
+        >
+          添加
+        </Button>
+      </Box>
+
+      {notes.length === 0 ? (
+        <Typography variant="caption" sx={{ color: '#484f58', fontSize: '0.75rem' }}>还没有临时任务</Typography>
+      ) : notes.map((n) => (
+        <Box key={n.id} sx={{ display: 'flex', alignItems: 'center', gap: 1, py: 0.3 }}>
+          <Checkbox
+            checked={n.done}
+            onChange={() => onToggle(n.id)}
+            size="small"
+            sx={{ color: '#484f58', '&.Mui-checked': { color: '#3fb950' }, p: 0.3 }}
+          />
+          <Box sx={{ flex: 1, minWidth: 0 }}>
+            <Typography variant="body2" sx={{ color: n.done ? '#6e7681' : '#c9d1d9', textDecoration: n.done ? 'line-through' : 'none', fontSize: '0.82rem' }}>
+              {n.text}
+            </Typography>
+            {n.done && n.doneAt && (
+              <Typography variant="caption" sx={{ color: '#484f58', fontSize: '0.65rem', display: 'block' }}>完成于 {n.doneAt}</Typography>
+            )}
+          </Box>
+          <IconButton size="small" onClick={() => setPending(n)} sx={{ color: '#484f58', '&:hover': { color: '#f85149' } }}>
+            <DeleteOutlineIcon sx={{ fontSize: 16 }} />
+          </IconButton>
+        </Box>
+      ))}
+
+      <ConfirmDialog
+        open={!!pending}
+        title="删除临时任务"
+        message={pending ? `确定删除「${pending.text}」吗？删除后不可恢复。` : ''}
+        onConfirm={() => { if (pending) onDelete(pending.id); }}
+        onClose={() => setPending(null)}
+      />
+    </Box>
+  );
+};
+
 const DetailGroup = ({ title, color, entries, todayStr, selectedDate, onToggleCheckin, onToggleTodo, onTogglePhase }) => (
   <Box sx={{ mb: 1.5 }}>
     <Typography variant="caption" sx={{ color, fontWeight: 700, fontSize: '0.8rem', display: 'block', mb: 0.3 }}>
@@ -255,6 +340,9 @@ function SchedulePage() {
   };
   const onToggleTodo = (id) => { toggleTodo(id); refresh(); };
   const onTogglePhase = (todoId, phaseId) => { toggleTodoPhase(todoId, phaseId); refresh(); };
+  const onAddNote = (text) => { addQuickNote(selectedDate, text); refresh(); };
+  const onToggleNote = (id) => { toggleQuickNote(selectedDate, id); refresh(); };
+  const onDeleteNote = (id) => { deleteQuickNote(selectedDate, id); refresh(); };
 
   const selectedEntries = getEntries(selectedDate);
   const selectedCheckins = selectedEntries.filter((e) => e.kind === 'checkin');
@@ -263,6 +351,8 @@ function SchedulePage() {
 
   // 提醒以「今天」为锚点滚动向前看一周，与左栏选中的日期无关
   const reminders = useMemo(() => getUpcomingPhases(REMINDER_WINDOW, todayStr), [todos, todayStr]);
+  // 临时任务则跟着选中的日期走，可以给任意一天记事项
+  const notes = useMemo(() => getQuickNotes(selectedDate), [selectedDate, version]);
 
   return (
     <Box sx={{ px: 1.5, pt: 2, pb: 2, width: '100%', minHeight: '100%', display: 'flex', flexDirection: 'column' }}>
@@ -433,6 +523,16 @@ function SchedulePage() {
               ))
             )}
           </Box>
+
+          {/* key 绑日期：切换选中日时清掉未提交的输入草稿 */}
+          <QuickNotes
+            key={selectedDate}
+            dateStr={selectedDate}
+            notes={notes}
+            onAdd={onAddNote}
+            onToggle={onToggleNote}
+            onDelete={onDeleteNote}
+          />
         </Box>
       </Box>
     </Box>

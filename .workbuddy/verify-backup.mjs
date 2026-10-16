@@ -19,9 +19,21 @@ const backup = await import('../src/utils/backup.js');
 const {
   addCheckinItem, toggleCheckin, addTodo, toggleTodo, toggleTodoPhase,
   getCheckinItems, getCheckinRecords, getTodos, getAllData,
+  addQuickNote, toggleQuickNote, getAllQuickNotes,
 } = storage;
 
 /* ---- 工具 ---- */
+/** 临时任务的可比较形态：不带 id（CSV 里没有 id，恢复时会新生成） */
+function notesComparable(map) {
+  const out = {};
+  Object.keys(map || {}).sort().forEach((date) => {
+    out[date] = (map[date] || [])
+      .slice()
+      .sort((a, b) => a.text.localeCompare(b.text))
+      .map((n) => ({ text: n.text, done: !!n.done, doneAt: n.done ? n.doneAt : '' }));
+  });
+  return out;
+}
 function recordsByName(records, items) {
   const nameOf = {};
   items.forEach((i) => { nameOf[i.id] = i.name; });
@@ -243,5 +255,45 @@ assert.equal(names.length, 1, '护栏不应影响记录归属');
 const rec = getCheckinRecords()['2026-09-05'][names[0]];
 assert.equal(rec.note, evilNote, '备注应原样还原（含逗号与引号）');
 console.log('OK: 公式注入护栏生效且导出→导入无损');
+
+/* ---- 9. 临时任务：CSV / JSON 两条路径往返 + 合并去重 + 旧备份兼容 ---- */
+localStorage.clear();
+const D1 = '2026-10-11';
+const D2 = '2026-10-12';
+addQuickNote(D1, '顺路取快递');
+addQuickNote(D1, '买牛奶, 面包, 鸡蛋');
+const d2list = addQuickNote(D2, '给妈妈回电话');
+toggleQuickNote(D2, d2list[d2list.length - 1].id);
+assert.equal(addQuickNote('2026-10-1', '   ').length, 0, '空内容或非法日期不应写入');
+
+const notesSnapshot = notesComparable(getAllQuickNotes());
+assert.equal(notesSnapshot[D1].length, 2, '第一天应有 2 条');
+assert.equal(notesSnapshot[D2][0].done, true, '勾选状态应已保存');
+assert.ok(notesSnapshot[D2][0].doneAt, '完成时间应被记录');
+
+const notesCsv = backup.buildAllCSV();
+assert.ok(notesCsv.includes('[临时任务]'), 'CSV 应含临时任务区块');
+localStorage.clear();
+const parsedNotes = backup.parseBackupCSV(notesCsv);
+assert.deepEqual(notesComparable(parsedNotes.quickNotes), notesSnapshot, 'CSV 解析结果应与导出一致');
+backup.restoreData(parsedNotes, 'replace');
+assert.deepEqual(notesComparable(getAllQuickNotes()), notesSnapshot, 'CSV 恢复后临时任务不一致');
+const noteMerge = backup.restoreData(parsedNotes, 'merge');
+assert.equal(noteMerge.quickNotes.added, 0, '合并模式不应重复新增临时任务');
+assert.equal(noteMerge.quickNotes.skipped, 3, `合并模式应跳过已存在的 3 条，实际 ${noteMerge.quickNotes.skipped}`);
+
+const notesJson = JSON.stringify(getAllData(), null, 2);
+assert.ok(JSON.parse(notesJson).quickNotes, '快照 JSON 必须包含 quickNotes');
+localStorage.clear();
+backup.restoreData(backup.parseBackupJSON(notesJson), 'replace');
+assert.deepEqual(notesComparable(getAllQuickNotes()), notesSnapshot, 'JSON 恢复后临时任务不一致');
+
+const legacyNoNotes = backup.parseBackupJSON(JSON.stringify({ items: [], records: {}, todos: [] }));
+assert.deepEqual(legacyNoNotes.quickNotes, {}, '缺 quickNotes 的旧备份应回落为空');
+localStorage.clear();
+addQuickNote(D1, '不该残留的条目');
+backup.restoreData(legacyNoNotes, 'replace');
+assert.deepEqual(getAllQuickNotes(), {}, '恢复旧备份应整份替换，不留旧条目');
+console.log('OK: 临时任务在 CSV / JSON 往返无损，合并去重且兼容缺字段的旧备份');
 
 console.log('\n全部验证通过 ✅');

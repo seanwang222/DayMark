@@ -18,6 +18,7 @@ DayMark（React 18 + Vite 4 渲染层，Electron 44 桌面层）的协作约定�
 ## 1. 存储模型（最容易改错的地方）
 
 - localStorage 是渲染层唯一的运行时存储，键名只在 `src/utils/storage.js` 的 `STORAGE_KEYS` 里定义；`SCHEMA_VERSION` 变更必须同步 `migrateIfNeeded()`，它在模块导入期就执行。
+- **新增一类数据（如临时任务）必须同时改到四个落点**：`getAllData()`（进快照 → 落盘与上云）、`applySnapshot()`（回填时整份替换，缺字段要写空值）、`setAllData()`（备份恢复的合并与覆盖）、`backup.js` 的 CSV 区块导出与解析。少一个就是静默丢数据；`verify:persistence` 与 `verify:backup` 已按这四个落点各留了用例。新键本身不需要动 `SCHEMA_VERSION`（老数据读出来归一化为空即可）。
 - 依赖方向是 **persistence → storage**：`storage.js` 通过 `onDataWritten()` 通知「数据变了」，`persistence.js` 决定「何时落盘」。**不要让 storage 反向 import persistence**，那正是回填前空快照盖掉本机文件的成因。
 - `ready` 之前（启动回填未完成）一律不落盘；`applySnapshot()` 故意不通知订阅者，避免刚下载的数据被回写并引发多余推送。
 - 快照的 `updatedAt` 是本地/云端比对的唯一依据（缺失时回落 `exportDate`）。任何生成快照的新路径都必须带上它。

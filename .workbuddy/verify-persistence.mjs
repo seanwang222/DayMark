@@ -56,7 +56,7 @@ let storedSnapshot = {
 
 /* 先导入 storage：模块导入期的 migrateIfNeeded 此刻还没有任何订阅者 */
 const storage = await import('../src/utils/storage.js');
-const { addTodo, getTodos, addCheckinItem } = storage;
+const { addTodo, getTodos, addCheckinItem, addQuickNote, getAllQuickNotes } = storage;
 
 /* 再导入 persistence：此刻才挂上写库监听 */
 const { initPersistence, flushNow } = await import('../src/utils/persistence.js');
@@ -77,12 +77,14 @@ try {
   assert.equal(getTodos().length, 1, '应回填云端那 1 条待办');
   assert.equal(getTodos()[0].id, 't-old');
   assert.deepEqual(writes, [], '回填是直写 localStorage，不应反过来触发一次落盘');
+  assert.deepEqual(getAllQuickNotes(), {}, '回填的快照里没有 quickNotes 时应为空（老版本文件）');
   console.log('OK: 启动回填恢复文件数据且自身不触发落盘');
 
   /* ---- 3. ready 之后写库：防抖合并成一次全量落盘 ---- */
   addTodo({ title: '新增待办A', description: {}, priority: 'not_urgent_important' });
   addTodo({ title: '新增待办B', description: {}, priority: 'not_urgent_important' });
   addTodo({ title: '新增待办C', description: {}, priority: 'not_urgent_important' });
+  addQuickNote('2026-10-11', '顺路取快递');
   assert.deepEqual(writes, [], '防抖窗口内不应立刻写文件');
   await sleep(500);
   assert.equal(writes.length, 1, `3 次写库应合并为 1 次落盘，实际 ${writes.length}`);
@@ -92,7 +94,8 @@ try {
   assert.equal(payload.todos.length, 4, '落盘的应是全量快照（回填 1 条 + 新增 3 条）');
   assert.equal(payload.updatedAt, payload.exportDate, 'updatedAt 必须存在，同步靠它判新旧');
   assert.ok(Array.isArray(payload.items) && typeof payload.records === 'object');
-  console.log('OK: ready 之后防抖合并，落盘为含 updatedAt 的全量快照');
+  assert.equal(payload.quickNotes['2026-10-11'][0].text, '顺路取快递', '临时任务必须进快照，否则换机/同步会丢');
+  console.log('OK: ready 之后防抖合并，落盘为含 updatedAt 与 quickNotes 的全量快照');
 
   /* ---- 4. 关窗兜底：beforeunload 走同步通道，且取消未到期的防抖 ---- */
   writes.length = 0;
@@ -130,6 +133,7 @@ try {
   assert.equal(reloadCount, 1, '应用云端快照后应刷新界面');
   assert.equal(getTodos()[0].id, 't-new');
   assert.deepEqual(writes, [], '收到的就是文件内容，不该再落一次盘引发布多余推送');
+  assert.deepEqual(getAllQuickNotes(), {}, '快照是整份替换：云端那份没有 quickNotes，本机也不该留');
   console.log('OK: 云端快照应用后刷新，且不产生回写');
 
   /* ---- 7. 缺少同步通道（旧版桥）时退回安全行为 ---- */

@@ -2,7 +2,7 @@
  * 全量备份工具
  *
  * 导出：
- * - exportAllCSV()    单文件 CSV，内含「打卡项目 / 打卡记录 / 待办事项」三个区块
+ * - exportAllCSV()    单文件 CSV，内含「打卡项目 / 打卡记录 / 待办事项 / 临时任务」四个区块
  * - exportBackupJSON() 完整备份 JSON，保留 id、阶段、排序等全部结构（推荐用于迁移）
  *
  * 恢复：
@@ -14,6 +14,7 @@ import {
   getCheckinItems,
   getCheckinRecords,
   getTodos,
+  getAllQuickNotes,
   getAllData,
   setAllData,
   TODO_PRIORITIES,
@@ -45,10 +46,12 @@ const SECTION = {
   ITEMS: '打卡项目',
   RECORDS: '打卡记录',
   TODOS: '待办事项',
+  NOTES: '临时任务',
 };
 
 const ITEM_HEADERS = ['项目名称', '创建日期', '排序'];
 const RECORD_HEADERS = ['日期', '项目名称', '状态', '完成时间', '备注'];
+const NOTE_HEADERS = ['日期', '内容', '状态', '完成时间', '创建时间'];
 const TODO_HEADERS = [
   '标题', '背景', '目标', '行动', '结果', '阶段',
   '优先级', '状态', '完成时间', '创建时间', '截止日期',
@@ -207,6 +210,7 @@ export function buildAllCSV() {
   const items = getCheckinItems();
   const records = getCheckinRecords();
   const todos = getTodos();
+  const quickNotes = getAllQuickNotes();
 
   const lines = [];
   lines.push('DayMark 全量数据导出');
@@ -268,6 +272,22 @@ export function buildAllCSV() {
       r.start || '',
     ]));
   });
+  lines.push('');
+
+  /* --- 区块四：临时任务 --- */
+  lines.push(`[${SECTION.NOTES}]`);
+  lines.push(csvRow(NOTE_HEADERS));
+  Object.keys(quickNotes).sort().forEach((date) => {
+    (quickNotes[date] || []).forEach((n) => {
+      lines.push(csvRow([
+        date,
+        n.text,
+        n.done ? '已完成' : '未完成',
+        n.doneAt || '',
+        n.createdAt || '',
+      ]));
+    });
+  });
 
   return lines.join('\n');
 }
@@ -326,8 +346,9 @@ export function parseBackupCSV(text) {
   const items = [];
   const records = {};
   const todos = [];
+  const quickNotes = {};
 
-  const known = [SECTION.ITEMS, SECTION.RECORDS, SECTION.TODOS];
+  const known = [SECTION.ITEMS, SECTION.RECORDS, SECTION.TODOS, SECTION.NOTES];
   const found = Object.keys(sections).filter((k) => known.includes(k));
   if (found.length === 0) {
     warnings.push('未识别到有效数据区块，请确认选择的是本应用导出的 CSV 文件。');
@@ -396,7 +417,25 @@ export function parseBackupCSV(text) {
     });
   }
 
-  return { items, records, todos, warnings };
+  /* --- 临时任务（CSV 里没有 id，交由存储层在恢复时补） --- */
+  const secNotes = sections[SECTION.NOTES];
+  if (secNotes && secNotes.header) {
+    secNotes.rows.forEach((r) => {
+      const date = String(r['日期'] || '').trim();
+      const text = String(r['内容'] || '').trim();
+      if (!date || !text) return;
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return;
+      if (!quickNotes[date]) quickNotes[date] = [];
+      quickNotes[date].push({
+        text,
+        done: isDone(r['状态']),
+        doneAt: String(r['完成时间'] || '').trim(),
+        createdAt: String(r['创建时间'] || '').trim(),
+      });
+    });
+  }
+
+  return { items, records, todos, quickNotes, warnings };
 }
 
 /**
@@ -422,6 +461,7 @@ export function parseBackupJSON(text) {
     items: Array.isArray(payload.items) ? payload.items : [],
     records: payload.records && typeof payload.records === 'object' ? payload.records : {},
     todos: Array.isArray(payload.todos) ? payload.todos : [],
+    quickNotes: payload.quickNotes && typeof payload.quickNotes === 'object' ? payload.quickNotes : {},
     warnings: [],
   };
 }
@@ -469,6 +509,16 @@ export function getDataOverview() {
   const items = getCheckinItems();
   const records = getCheckinRecords();
   const todos = getTodos();
+  const quickNotes = getAllQuickNotes();
+
+  let noteCount = 0;
+  let noteDone = 0;
+  Object.keys(quickNotes).forEach((date) => {
+    (quickNotes[date] || []).forEach((n) => {
+      noteCount += 1;
+      if (n.done) noteDone += 1;
+    });
+  });
 
   let recordCount = 0;
   const dates = [];
@@ -495,5 +545,7 @@ export function getDataOverview() {
     lastDay: dates[dates.length - 1] || '',
     todoCount: todos.length,
     todoDone: todos.filter((t) => t.completed).length,
+    noteCount,
+    noteDone,
   };
 }

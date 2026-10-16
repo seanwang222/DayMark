@@ -5,6 +5,7 @@
  * - 待办描述：STAR 法则 { situation, target, action, result }
  * - 待办优先级：四象限 urgent_important / urgent_not_important / not_urgent_important / not_urgent_not_important
  * - 待办完成：{ completedTime, review: { keep, improve, stop, start } }
+ * - 临时任务：按天存 { 'YYYY-MM-DD': [{ id, text, done, createdAt, doneAt }] }
  *
  * 数据持久化：所有写操作统一走 safeWrite，末尾通知 onDataWritten 的订阅者，
  * 由 utils/persistence 决定「何时」落盘到本机文件（浏览器 / Node 测试环境无订阅者即 no-op）。
@@ -18,6 +19,7 @@ const STORAGE_KEYS = {
   CHECKIN_ITEMS: 'daily_checkin_items',
   CHECKIN_RECORDS: 'daily_checkin_records',
   TODOS: 'daily_todos',
+  QUICK_NOTES: 'daily_quick_notes',
   SCHEMA_VERSION: 'daily_schema_version',
 };
 
@@ -959,7 +961,94 @@ export function getAllData() {
     items: getCheckinItems(),
     records: getCheckinRecords(),
     todos: getTodos(),
+    quickNotes: getAllQuickNotes(),
   };
+}
+
+/* ==================== 临时任务（按天手动记录） ==================== */
+
+/**
+ * 结构：{ 'YYYY-MM-DD': [{ id, text, done, createdAt, doneAt }] }
+ * 新增这个键不需要动 SCHEMA_VERSION / migrateIfNeeded：老数据里没有它，读取时归一化即为空。
+ * 但读取一律过一次 normalize：这份数据可能来自另一台设备的快照或手工编辑过的备份，
+ * 缺字段、类型不对要在边界上修掉，而不是带进界面。
+ */
+function normalizeQuickNote(n) {
+  if (!n || typeof n !== 'object') return null;
+  const text = String(n.text == null ? '' : n.text).trim();
+  if (!text) return null;
+  const done = !!n.done;
+  return {
+    id: n.id || generateId(),
+    text: text.slice(0, 200),
+    done,
+    createdAt: n.createdAt || '',
+    doneAt: done ? n.doneAt || '' : '',
+  };
+}
+
+function normalizeQuickNotes(raw) {
+  const out = {};
+  const map = raw && typeof raw === 'object' ? raw : {};
+  Object.keys(map).forEach((date) => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return;
+    const arr = Array.isArray(map[date]) ? map[date] : [];
+    const cleaned = arr.map(normalizeQuickNote).filter(Boolean);
+    if (cleaned.length > 0) out[date] = cleaned;
+  });
+  return out;
+}
+
+/** 某天的临时任务，按录入顺序 */
+export function getQuickNotes(dateStr) {
+  const all = normalizeQuickNotes(safeRead(STORAGE_KEYS.QUICK_NOTES, {}));
+  return all[dateStr] || [];
+}
+
+/** 全部临时任务（键为日期），快照与统计用 */
+export function getAllQuickNotes() {
+  return normalizeQuickNotes(safeRead(STORAGE_KEYS.QUICK_NOTES, {}));
+}
+
+/** 新增一条，返回该日期最新列表；日期非法或内容为空则不写 */
+export function addQuickNote(dateStr, text) {
+  const content = String(text == null ? '' : text).trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(dateStr)) || !content) return [];
+  const all = getAllQuickNotes();
+  const day = Array.isArray(all[dateStr]) ? all[dateStr] : [];
+  day.push({
+    id: generateId(),
+    text: content.slice(0, 200),
+    done: false,
+    createdAt: new Date().toISOString(),
+    doneAt: '',
+  });
+  all[dateStr] = day;
+  safeWrite(STORAGE_KEYS.QUICK_NOTES, all);
+  return all[dateStr];
+}
+
+/** 勾选 / 取消勾选：完成时记下时间，取消时清空 */
+export function toggleQuickNote(dateStr, id) {
+  const all = getAllQuickNotes();
+  const day = Array.isArray(all[dateStr]) ? all[dateStr] : [];
+  const next = day.map((n) => (n.id === id
+    ? { ...n, done: !n.done, doneAt: !n.done ? getNowTime() : '' }
+    : n));
+  if (next.length > 0) all[dateStr] = next;
+  safeWrite(STORAGE_KEYS.QUICK_NOTES, all);
+  return next;
+}
+
+/** 删除一条；该日清空后不留空数组键 */
+export function deleteQuickNote(dateStr, id) {
+  const all = getAllQuickNotes();
+  const day = Array.isArray(all[dateStr]) ? all[dateStr] : [];
+  const next = day.filter((n) => n.id !== id);
+  if (next.length > 0) all[dateStr] = next;
+  else delete all[dateStr];
+  safeWrite(STORAGE_KEYS.QUICK_NOTES, all);
+  return next;
 }
 
 /* ==================== 快照（桌面版落盘 / 云端同步的载荷） ==================== */
@@ -982,6 +1071,8 @@ export function applySnapshot(snap) {
     localStorage.setItem(STORAGE_KEYS.CHECKIN_ITEMS, JSON.stringify(Array.isArray(snap.items) ? snap.items : []));
     localStorage.setItem(STORAGE_KEYS.CHECKIN_RECORDS, JSON.stringify(snap.records && typeof snap.records === 'object' ? snap.records : {}));
     localStorage.setItem(STORAGE_KEYS.TODOS, JSON.stringify(Array.isArray(snap.todos) ? snap.todos : []));
+    // 老版本快照里没有这一项，同样要写成空：回填是「整份替换」，留旧值会让界面显示不属于这份数据的内容
+    localStorage.setItem(STORAGE_KEYS.QUICK_NOTES, JSON.stringify(normalizeQuickNotes(snap.quickNotes)));
     localStorage.setItem(STORAGE_KEYS.SCHEMA_VERSION, String(snap.schemaVersion || SCHEMA_VERSION));
     return true;
   } catch (e) {
@@ -1007,6 +1098,7 @@ export function setAllData(data, mode = 'merge') {
     items: { added: 0, kept: 0 },
     records: { added: 0, skipped: 0 },
     todos: { added: 0, skipped: 0 },
+    quickNotes: { added: 0, skipped: 0 },
   };
 
   const incoming = data || {};
@@ -1014,11 +1106,13 @@ export function setAllData(data, mode = 'merge') {
   const incomingRecords =
     incoming.records && typeof incoming.records === 'object' ? incoming.records : {};
   const incomingTodos = Array.isArray(incoming.todos) ? incoming.todos : [];
+  const incomingNotes = normalizeQuickNotes(incoming.quickNotes);
 
   const replace = mode === 'replace';
   const items = replace ? [] : [...getCheckinItems()];
   const records = replace ? {} : { ...getCheckinRecords() };
   const todos = replace ? [] : [...getTodos()];
+  const quickNotes = replace ? {} : getAllQuickNotes();
 
   /* ---- 打卡项目：按名称去重 ---- */
   const nameToId = {};
@@ -1091,9 +1185,25 @@ export function setAllData(data, mode = 'merge') {
   });
   todos.forEach((t, idx) => { t.order = idx; });
 
+  /* ---- 临时任务：按 日期 + 内容 去重，同一天同一句话只留一条 ---- */
+  const noteIdTaken = (id) => Object.keys(quickNotes).some((d) => quickNotes[d].some((n) => n.id === id));
+  Object.keys(incomingNotes).forEach((date) => {
+    const day = Array.isArray(quickNotes[date]) ? quickNotes[date] : [];
+    incomingNotes[date].forEach((src) => {
+      if (day.some((n) => n.text === src.text || n.id === src.id)) {
+        stats.quickNotes.skipped++;
+        return;
+      }
+      day.push(noteIdTaken(src.id) ? { ...src, id: generateId() } : src);
+      stats.quickNotes.added++;
+    });
+    if (day.length > 0) quickNotes[date] = day;
+  });
+
   safeWrite(STORAGE_KEYS.CHECKIN_ITEMS, items);
   safeWrite(STORAGE_KEYS.CHECKIN_RECORDS, records);
   safeWrite(STORAGE_KEYS.TODOS, todos);
+  safeWrite(STORAGE_KEYS.QUICK_NOTES, quickNotes);
   safeWrite(STORAGE_KEYS.SCHEMA_VERSION, SCHEMA_VERSION);
 
   return stats;
