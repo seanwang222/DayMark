@@ -25,10 +25,11 @@ import ConfirmDialog from '../components/ConfirmDialog';
 import CheckinCalendar from '../components/CheckinCalendar';
 import { getRateColor } from '../utils/colors';
 import {
-  getCheckinItems,
+  getActiveCheckinItems,
   addCheckinItem,
   editCheckinItem,
   deleteCheckinItem,
+  archiveCheckinItem,
   getCheckinRecordByDate,
   toggleCheckin,
   getCheckinStats,
@@ -36,7 +37,7 @@ import {
   formatDate,
   getQuarterlyData,
   getYearlyData,
-  getCheckinRecords,
+  getViewRange,
   getItemStats,
   getOverallStats,
   reorderCheckinItems,
@@ -80,7 +81,7 @@ function StatCell({ label, value, highlight }) {
  * 左侧：每日打卡 | 右侧：汇总统计
  */
 function CheckinPage() {
-  const [items, setItems] = useState(() => getCheckinItems());
+  const [items, setItems] = useState(() => getActiveCheckinItems());
   const [currentDate, setCurrentDate] = useState(() => getToday());
   const [records, setRecords] = useState(() => ({}));
   const [stats, setStats] = useState(() => ({ completed: 0, total: 0, rate: 0 }));
@@ -116,15 +117,19 @@ function CheckinPage() {
     [year, filterItemId, items, records],
   );
 
-  // 统计卡数据：单项目 = 该项目全生命周期统计；全部项目 = 全勤日口径聚合统计
-  // （月度 / 季度 / 年度三个视图下均一致展示，与其它项目保持一致）
-  const itemStats = useMemo(
-    () => (filterItemId ? getItemStats(filterItemId) : getOverallStats()),
-    [filterItemId, items, records],
+  // 汇总统计的区间跟着「月度 / 季度 / 年度」切换：四个指标都只在这段区间里算，
+  // 连续段也不跨越区间边界，否则月度视图会显示一个跨月的数字，与视图标题自相矛盾。
+  const statsRange = useMemo(
+    () => getViewRange(view, year, month, quarter),
+    [view, year, month, quarter],
   );
 
-  // 单项目模式下，明细列表要展示打卡时间与备注
-  const allRecords = useMemo(() => getCheckinRecords(), [records, items]);
+  // 统计卡数据：单项目 = 该项目；全部项目 = 全勤日口径聚合。两者都按 statsRange 取数，
+  // 项目在册区间（创建日 → 归档日前一天）与之求交，所以归档不会追溯改写历史月份的数字。
+  const itemStats = useMemo(
+    () => (filterItemId ? getItemStats(filterItemId, statsRange) : getOverallStats(statsRange)),
+    [filterItemId, statsRange, items, records],
+  );
 
   // 被筛选的项目若已被删除，自动回到「全部项目」
   useEffect(() => {
@@ -142,7 +147,7 @@ function CheckinPage() {
   // 刷新数据
   const refreshData = useCallback((date) => {
     const d = date || currentDate;
-    setItems([...getCheckinItems()]);
+    setItems([...getActiveCheckinItems()]);
     setRecords({ ...getCheckinRecordByDate(d) });
     setStats({ ...getCheckinStats(d) });
   }, [currentDate]);
@@ -241,6 +246,12 @@ function CheckinPage() {
     setDeleteItem(null);
   };
 
+  // 归档：项目退出界面与今日分母，历史记录原样留着；恢复入口在「数据管理 → 归档」
+  const handleArchiveItem = (id) => {
+    archiveCheckinItem(id);
+    refreshData(currentDate);
+  };
+
   const hasItems = items.length > 0;
 
   // —— 拖拽排序 ——
@@ -256,8 +267,9 @@ function CheckinPage() {
     const newOrder = [...sortedItems];
     const [moved] = newOrder.splice(dragIndex, 1);
     newOrder.splice(idx, 0, moved);
-    const reordered = reorderCheckinItems(newOrder.map((i) => i.id));
-    setItems(reordered);
+    reorderCheckinItems(newOrder.map((i) => i.id));
+    // 写入的是完整数组（含归档项，它们必须留在存储里），界面重新只取未归档的那份
+    setItems(getActiveCheckinItems());
     setDragIndex(null);
     setOverIndex(null);
   };
@@ -404,6 +416,7 @@ function CheckinPage() {
                   onRequestComplete={handleRequestComplete}
                   onCancelComplete={handleCancelComplete}
                   onEdit={handleOpenEdit}
+                  onArchive={handleArchiveItem}
                   onDelete={handleDeleteItem}
                   onEditRecord={handleEditRecord}
                   index={idx}
@@ -418,6 +431,9 @@ function CheckinPage() {
             <Typography variant="body1" sx={{ mb: 1 }}>还没有打卡项目</Typography>
             <Typography variant="body2" sx={{ color: '#484f58' }}>
               点击下方按钮添加你的第一个打卡项目
+            </Typography>
+            <Typography variant="caption" sx={{ color: '#484f58', display: 'block', mt: 1 }}>
+              已归档的项目同样不在这里显示，可在「数据管理 → 归档」中查看与恢复
             </Typography>
           </Box>
         )}
@@ -595,28 +611,33 @@ function CheckinPage() {
           )}
         </Box>
 
-        {/* 选中单个项目时，展示该项目的独立汇总统计 */}
+        {/* 汇总统计：四个指标都只统计当前视图区间（月度 / 季度 / 年度），不再拿全生命周期当基准 */}
         {itemStats && (
           <Box sx={{ mb: 2 }}>
             <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
               <StatCell
                 label="完成天数"
-                value={`${itemStats.doneDays}/${itemStats.totalDays}`}
+                value={itemStats.empty ? '—' : `${itemStats.doneDays}/${itemStats.totalDays}`}
               />
               <StatCell
                 label="完成率"
-                value={`${itemStats.rate}%`}
-                highlight={itemStats.rate >= 80}
+                value={itemStats.empty ? '—' : `${itemStats.rate}%`}
+                highlight={!itemStats.empty && itemStats.rate >= 80}
               />
               <StatCell
                 label="当前连续"
-                value={`${itemStats.currentStreak} 天`}
-                highlight={itemStats.currentStreak >= 7}
+                value={itemStats.empty ? '—' : `${itemStats.currentStreak} 天`}
+                highlight={!itemStats.empty && itemStats.currentStreak >= 7}
               />
-              <StatCell label="最长连续" value={`${itemStats.longestStreak} 天`} />
+              <StatCell
+                label="最长连续"
+                value={itemStats.empty ? '—' : `${itemStats.longestStreak} 天`}
+              />
             </Box>
             <Typography variant="caption" sx={{ color: '#6e7681', display: 'block', mt: 1 }}>
-              {itemStats.createdAt ? `统计区间：${itemStats.createdAt} 至今` : '统计区间：全部有记录日期'}
+              {itemStats.empty
+                ? `${viewLabel}：区间内没有可统计的日期（区间尚未开始，或项目当时不在册）`
+                : `${viewLabel} · 统计区间：${itemStats.rangeStart} ~ ${itemStats.rangeEnd}`}
               {itemStats.firstDone ? ` · 首次完成 ${itemStats.firstDone}` : ''}
               {itemStats.lastDone ? ` · 最近完成 ${itemStats.lastDone}` : ''}
             </Typography>
@@ -625,21 +646,12 @@ function CheckinPage() {
 
         {/* 汇总内容区：整体不滚动，仅此区域内部滚动；flex column 让月历可拉伸填满 */}
         <Box sx={{ flex: 1, minHeight: 0, overflow: 'auto', mt: 1, display: 'flex', flexDirection: 'column' }}>
-          {view === 'monthly' && filterItemId === null && (
+          {view === 'monthly' && (
             <CheckinCalendar
-              items={items}
-              records={allRecords}
               year={year}
               month={month}
-              onSelectDate={(ds) => { setCurrentDate(ds); refreshData(ds); }}
-            />
-          )}
-          {view === 'monthly' && filterItemId !== null && (
-            <CheckinCalendar
-              items={items.filter((i) => i.id === filterItemId)}
-              records={allRecords}
-              year={year}
-              month={month}
+              itemId={filterItemId}
+              selectedDate={currentDate}
               onSelectDate={(ds) => { setCurrentDate(ds); refreshData(ds); }}
             />
           )}

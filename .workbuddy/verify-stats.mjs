@@ -14,9 +14,11 @@ globalThis.localStorage = {
 };
 
 const {
-  addCheckinItem, toggleCheckin, getCheckinItems,
+  addCheckinItem, toggleCheckin, getCheckinItems, getCheckinStats,
+  getActiveCheckinItems, getArchivedCheckinItems, archiveCheckinItem, unarchiveCheckinItem,
+  reorderCheckinItems,
   getMonthlyData, getQuarterlyData, getYearlyData,
-  getItemStats, getOverallStats,
+  getItemStats, getOverallStats, getViewRange,
 } = await import('../src/utils/storage.js');
 
 function pad2(n) { return String(n).padStart(2, '0'); }
@@ -30,6 +32,27 @@ function daysAgo(n) {
   const d = new Date();
   d.setDate(d.getDate() - n);
   return fmt(d);
+}
+
+/**
+ * 独立实现一遍「区间内在册天数」，用来交叉验证 storage 里的统计：
+ * [start, end] ∩ [创建日, 归档日前一天] ∩ (−∞, 今天]
+ * 测试自己也算一遍，才不会把被测实现的口径原样抄成期望值。
+ */
+function activeDaysIn(startStr, endStr, createdAt, archivedAt) {
+  const today = fmt(new Date());
+  const from = startStr > createdAt ? startStr : createdAt;
+  const to = endStr > today ? today : endStr;
+  let n = 0;
+  const cur = new Date(`${from}T00:00:00`);
+  const stop = new Date(`${to}T00:00:00`);
+  while (cur <= stop) {
+    const ds = fmt(cur);
+    if (archivedAt && ds >= archivedAt) break;
+    n += 1;
+    cur.setDate(cur.getDate() + 1);
+  }
+  return n;
 }
 
 function reset() {
@@ -280,5 +303,150 @@ assert.equal(yearI.avgRate, Math.round(
   yearI.monthData.reduce((n, m) => n + m.completed, 0) / yearI.monthData.reduce((n, m) => n + m.total, 0) * 100,
 ), '年度完成率应基于已到来的项目·天数');
 console.log(`OK: 场景I（多项口径按当日已存在项目 + 不统计未来日）${doneI}/${expectedTotal} → ${Math.round(doneI / expectedTotal * 100)}%`);
+
+// ==================== 场景J：汇总统计按所选区间算，不再拿全生命周期当基准 ====================
+// 起因：统计卡上的「完成天数 / 完成率 / 当前连续 / 最长连续」曾经只有「创建日 → 今天」一套口径，
+// 切到月度 / 季度 / 年度视图时数字纹丝不动，与视图标题自相矛盾。
+reset();
+{
+  // 视图区间的边界先单独钉住（含闰年 2 月与季度末）
+  assert.deepEqual(getViewRange('monthly', 2026, 2), { start: '2026-02-01', end: '2026-02-28' });
+  assert.deepEqual(getViewRange('monthly', 2024, 2), { start: '2024-02-01', end: '2024-02-29' });
+  assert.deepEqual(getViewRange('yearly', 2026), { start: '2026-01-01', end: '2026-12-31' });
+  assert.deepEqual(getViewRange('quarterly', 2026, null, 1), { start: '2026-01-01', end: '2026-03-31' });
+  assert.deepEqual(getViewRange('quarterly', 2026, null, 4), { start: '2026-10-01', end: '2026-12-31' });
+}
+
+reset();
+addCheckinItem('晨跑');
+const [J] = getCheckinItems();
+const rawJ = JSON.parse(localStorage.getItem('daily_checkin_items'));
+rawJ[0].createdAt = daysAgo(45);
+localStorage.setItem('daily_checkin_items', JSON.stringify(rawJ));
+// 从创建日到今天，一天不落
+for (let n = 45; n >= 0; n -= 1) {
+  toggleCheckin(daysAgo(n), J.id, true, { time: '07:00', note: '' });
+}
+
+const nowJ = new Date();
+const lifeJ = getItemStats(J.id);
+assert.equal(lifeJ.totalDays, 46, `全生命周期应为 46 天，实际 ${lifeJ.totalDays}`);
+assert.equal(lifeJ.longestStreak, 46, '全生命周期的连续可以跨月');
+
+const jMonthPrefix = `${nowJ.getFullYear()}-${pad2(nowJ.getMonth() + 1)}`;
+const mRange = getViewRange('monthly', nowJ.getFullYear(), nowJ.getMonth() + 1);
+const mJ = getItemStats(J.id, mRange);
+assert.equal(mJ.rangeStart, `${jMonthPrefix}-01`, '月度区间起点应为当月 1 号');
+assert.equal(mJ.rangeEnd, fmt(nowJ), `区间末必须裁剪到今天，实际 ${mJ.rangeEnd}`);
+assert.equal(mJ.totalDays, nowJ.getDate(), `月度分母应为当月已到来的 ${nowJ.getDate()} 天，实际 ${mJ.totalDays}`);
+assert.equal(mJ.doneDays, mJ.totalDays);
+assert.equal(mJ.rate, 100);
+assert.equal(mJ.longestStreak, mJ.totalDays, `月度视图的最长连续不得跨出当月（实际 ${mJ.longestStreak}）`);
+assert.equal(mJ.currentStreak, mJ.totalDays);
+assert.equal(mJ.firstDone, `${jMonthPrefix}-01`, '首次完成也应落在区间内');
+
+// 季度 / 年度各自算自己那段，且与「在册区间」求交
+const qIdx = Math.floor(nowJ.getMonth() / 3) + 1;
+const qRange = getViewRange('quarterly', nowJ.getFullYear(), null, qIdx);
+const qJ = getItemStats(J.id, qRange);
+assert.equal(qJ.totalDays, activeDaysIn(qRange.start, qRange.end, daysAgo(45), ''),
+  `季度分母应为区间内在册的 ${activeDaysIn(qRange.start, qRange.end, daysAgo(45), '')} 天，实际 ${qJ.totalDays}`);
+assert.equal(qJ.longestStreak, qJ.totalDays, '季度区间内的连续不应跨出季度起点');
+
+const yRange = getViewRange('yearly', nowJ.getFullYear());
+const yJ = getItemStats(J.id, yRange);
+assert.equal(yJ.rangeStart, daysAgo(45), `年度区间应与创建日求交，实际 ${yJ.rangeStart}`);
+assert.equal(yJ.totalDays, activeDaysIn(yRange.start, yRange.end, daysAgo(45), ''));
+assert.equal(yJ.totalDays, 46, '创建日落在本年度内，年度区间应等于全生命周期');
+
+// 查看上个月：连续算到该月末，而不是把今天的实时值搬过来
+const prevMonth = new Date(nowJ.getFullYear(), nowJ.getMonth() - 1, 1);
+const pRange = getViewRange('monthly', prevMonth.getFullYear(), prevMonth.getMonth() + 1);
+const pJ = getItemStats(J.id, pRange);
+assert.equal(pJ.totalDays, activeDaysIn(pRange.start, pRange.end, daysAgo(45), ''));
+assert.equal(pJ.rangeEnd, pRange.end, '历史月份的区间末就是该月最后一天，不该裁剪到今天');
+assert.equal(pJ.currentStreak, pJ.totalDays, '历史月份显示的应是截至该月末的连续');
+assert.equal(pJ.lastDone, pRange.end);
+
+// 未来年度：整天没有一天在册，应报「无可统计」而不是 0% 完成率
+const futureJ = getItemStats(J.id, getViewRange('yearly', nowJ.getFullYear() + 1));
+assert.equal(futureJ.empty, true, '未来区间应整体不参与统计');
+assert.equal(futureJ.totalDays, 0);
+assert.equal(futureJ.rate, 0);
+assert.equal(futureJ.currentStreak, 0);
+console.log('OK: 场景J（完成天数/完成率/连续全部按月度·季度·年度区间计算）');
+
+// ==================== 场景K：归档 = 退出界面，但不追溯改写历史 ====================
+reset();
+addCheckinItem('阶段性项目');
+addCheckinItem('仍在册项目');
+const [KA, KB] = getCheckinItems();
+const rawK = JSON.parse(localStorage.getItem('daily_checkin_items'));
+rawK.forEach((i) => { i.createdAt = daysAgo(20); });
+localStorage.setItem('daily_checkin_items', JSON.stringify(rawK));
+for (let n = 20; n >= 1; n -= 1) {
+  [KA, KB].forEach((it) => toggleCheckin(daysAgo(n), it.id, true, { time: '07:00', note: '' }));
+}
+// 今天只打 KB，然后把 KA 归档（归档日 = 今天）
+toggleCheckin(daysAgo(0), KB.id, true, { time: '07:00', note: '' });
+archiveCheckinItem(KA.id);
+
+assert.equal(getActiveCheckinItems().length, 1, '归档项不应再出现在可见列表里');
+assert.equal(getActiveCheckinItems()[0].id, KB.id);
+assert.equal(getArchivedCheckinItems().length, 1, '归档项应能在归档清单里查到');
+assert.equal(getArchivedCheckinItems()[0].archivedAt, fmt(nowJ), '归档日应为今天');
+
+// 今日完成 x/y：归档当天起不再计入分母，昨天两点都打了卡仍是全勤
+assert.equal(getCheckinStats(daysAgo(0)).total, 1, `归档后今天的分母应为 1，实际 ${getCheckinStats(daysAgo(0)).total}`);
+assert.equal(getCheckinStats(daysAgo(0)).completed, 1);
+assert.equal(getCheckinStats(daysAgo(1)).total, 2, '归档不得改写昨天的分母');
+assert.equal(getCheckinStats(daysAgo(1)).completed, 2, '昨天的完成记录必须照旧统计');
+
+// 热力图口径：归档日及以后 excluded，之前一天不少
+const kMonth = getMonthlyData(nowJ.getFullYear(), nowJ.getMonth() + 1, KA.id);
+const kToday = kMonth.find((d) => d.date === fmt(nowJ));
+assert.equal(kToday.excluded, true, '归档日及以后不该参与统计');
+assert.equal(kToday.total, 0);
+const kYesterday = kMonth.find((d) => d.date === daysAgo(1));
+if (daysAgo(1).slice(0, 7) === jMonthPrefix) {
+  assert.equal(kYesterday.excluded, undefined, '归档日之前仍应参与统计');
+  assert.equal(kYesterday.total, 1);
+  assert.equal(kYesterday.completed, 1);
+}
+
+// 不变式：归档后「各单项目 total 之和 == 聚合 total」仍然成立
+const kAll = getMonthlyData(nowJ.getFullYear(), nowJ.getMonth() + 1);
+const sumTotal = (rows) => rows.reduce((n, d) => n + d.total, 0);
+const kSingleSum = [KA.id, KB.id]
+  .reduce((n, id) => n + sumTotal(getMonthlyData(nowJ.getFullYear(), nowJ.getMonth() + 1, id)), 0);
+assert.equal(sumTotal(kAll), kSingleSum, '归档后单项目与聚合的分母仍要能相加对齐');
+
+// 聚合统计：归档当天只剩在册项目，全勤率不该被归档拉低
+const overallK = getOverallStats(getViewRange('monthly', nowJ.getFullYear(), nowJ.getMonth() + 1));
+assert.equal(overallK.doneDays, overallK.totalDays, '归档后当月全勤日应等于在册日');
+assert.equal(overallK.rate, 100, `归档不应拉低完成率，实际 ${overallK.rate}%`);
+
+// 归档项目的历史：区间求交后只算归档日之前
+const archivedLifeK = getItemStats(KA.id);
+assert.equal(archivedLifeK.totalDays, activeDaysIn(daysAgo(20), fmt(nowJ), daysAgo(20), fmt(nowJ)));
+assert.equal(archivedLifeK.doneDays, archivedLifeK.totalDays, '归档项目的历史完成率应保持 100%');
+assert.equal(archivedLifeK.empty, false);
+
+// 取消归档：字段整体消失，历史重新完整参与
+unarchiveCheckinItem(KA.id);
+assert.equal(getActiveCheckinItems().length, 2, '恢复归档后应重新可见');
+assert.equal(getArchivedCheckinItems().length, 0);
+const rawK2 = JSON.parse(localStorage.getItem('daily_checkin_items')).find((i) => i.id === KA.id);
+assert.equal(rawK2.archived, undefined, '取消归档应删掉归档字段');
+assert.equal(rawK2.archivedAt, undefined, '取消归档应删掉归档日期');
+assert.equal(getCheckinStats(daysAgo(0)).total, 2, '恢复后今天重新计入分母');
+
+// 界面拖拽只传可见项的 id，归档项不得被顺手抹掉
+archiveCheckinItem(KA.id);
+reorderCheckinItems([KB.id]);
+assert.equal(getCheckinItems().length, 2, 'reorder 不得把没传入的归档项从存储里抹掉');
+assert.equal(getActiveCheckinItems().length, 1);
+assert.equal(getCheckinItems().find((i) => i.id === KA.id).archived, true, '归档状态应原样保留');
+console.log('OK: 场景K（归档退出界面与当日分母，历史与分母对齐不受损）');
 
 console.log('\n全部验证通过 ✅');

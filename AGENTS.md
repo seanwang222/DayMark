@@ -24,7 +24,10 @@ DayMark（React 18 + Vite 4 渲染层，Electron 44 桌面层）的协作约定�
 - 快照的 `updatedAt` 是本地/云端比对的唯一依据（缺失时回落 `exportDate`）。任何生成快照的新路径都必须带上它。
 - 桌面版落盘走主进程：`.tmp` + 同卷 `renameSync` 原子写。**不要退回单步 `writeFileSync`**，半截 JSON 会被 `readLocal` 当作「本机为空」，一次同步就把「空」推上云端。
 - 冲突策略是「只在会丢较新一方时动手，且动手前先留档」。决策逻辑是纯函数 `planPull` / `planPush`（`electron/webdav.js`），主进程只负责执行动作；新需求请扩这两个函数并补 `verify:webdav` 用例，不要把判断写进 IPC handler。
-- **统计口径**：完成率的分母只算「当天已经存在的打卡项」，且未到来的日子不参与统计（`getMonthlyData` 是唯一的口径实现，季/年视图从它汇总）。单项目与多项聚合的 `total` 必须能相加对齐 —— 改这里同时跑 `verify:stats`。
+- **统计口径**：某天进不进分母，只问 `storage.js` 的 `isItemActiveOn(item, dateStr)`（在册 = `createdAt ≤ 当天 < archivedAt`）。分母只算「当天在册的打卡项」，且未到来的日子不参与统计。分日实现是 `getMonthlyData`（季/年视图从它汇总，`CheckinCalendar` 也必须直接消费它的输出含 `excluded`，**不要在组件里再抄一份 filter**——1.1.1 之前那套「月历自己算一套」就是最容易复发的缺陷）。单项目与多项聚合的 `total` 必须能相加对齐 —— 改这里同时跑 `verify:stats`。
+- **汇总统计只按所选区间算**：打卡页统计卡的完成天数 / 完成率 / 当前连续 / 最长连续全部落在 `getViewRange(view, year, month, quarter)` 给出的区间里，实现唯一是 `statsFromRange`（`getItemStats(itemId, range)` 与 `getOverallStats(range)` 都汇到它）。连续段不跨越区间边界；`skip` 的那天既不进分母也不打断连续；区间整体在未来时返回 `empty: true`，界面显示「—」而不是 0%。不要把这四个数字再改回「创建日至今」的总账。
+- **归档（1.1.2 起）不新增存储键**：打卡项与待办仍共用原数组，归档只是加 `archived` / `archivedAt` 两个字段，所以 `getAllData()` / `applySnapshot()` / 快照落盘 / WebDAV 都不用改。但要盯住三处白名单重建，漏一个就静默丢归档状态：`normalizeTodo()`、`setAllData()` 里打卡项的重建、`backup.js` 的 CSV 列与解析（旧备份缺列必须安全回落为未归档）。**界面取数只走 `getActiveCheckinItems()` / `getActiveTodos()`**（`getCheckinItems()` / `getTodos()` 是含归档的全量，只给备份与归档清单用），归档的查看与恢复入口唯一在「数据管理 → 归档」，不要在页面里另起一个归档列表。回归见 `verify:stats` 场景 K、`verify:todo` 第 7 组、`verify:backup` 第 10 组、`verify:persistence` 第 6.5 组。
+- `reorderCheckinItems()` / `reorderTodos()` 收到的是「界面当前可见」的 id 列表，**不等于整组数据**：归档项（以及任何没被传入的条目）必须按原顺序追加写回，不能拿传入数组直接覆盖存储。取消归档用 `delete` 掉两个字段，别写 `archived: false`，这样恢复后的记录与从未归档过逐字节等价。
 - 「已过期」判定统一走 `storage.js` 的 `isPastDue(completed, dueDate, todayStr)`。**不要在现场直接写 `dueDate < todayStr`**：空 `dueDate` 参与字符串比较恒为真，会把所有无截止日的待办标成过期。
 - 日程页「提醒」的取数与排序是 `storage.js` 的 `getUpcomingPhases(withinDays, todayStr)`，只有一个排序键（剩余天数升序，逾期为负故自然置顶）。改窗口或改排序都去扩 `verify:todo` 第 6 组，不要在页面里另写一套。
 - CSV 的公式注入护栏是成对的：`csvCell` 给以 `= + - @` 开头的内容加前置撇号，`parseCSV` 再脱掉。改其中一处必须同时改另一处，否则「导出 → 恢复」会多出一个撇号（`verify:backup` 有往返用例）。

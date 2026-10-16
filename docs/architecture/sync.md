@@ -37,7 +37,7 @@ t(s) = s.updatedAt || s.exportDate || ''     // 字符串比较
 相等 → 'equal'，否则较大的一方
 ```
 
-快照的 `updatedAt` 是本地/云端比对的**唯一依据**，任何生成快照的新路径都必须带上它（`storage.js:968-971` 在 `buildSnapshot()` 里补 `updatedAt`）。
+快照的 `updatedAt` 是本地/云端比对的**唯一依据**，任何生成快照的新路径都必须带上它（`storage.js:1239-1242` 在 `buildSnapshot()` 里补 `updatedAt`）。
 
 ## 决策表
 

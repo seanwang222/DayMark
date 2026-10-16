@@ -14,6 +14,8 @@ import {
   getCheckinItems,
   getCheckinRecords,
   getTodos,
+  getArchivedCheckinItems,
+  getArchivedTodos,
   getAllQuickNotes,
   getAllData,
   setAllData,
@@ -49,13 +51,13 @@ const SECTION = {
   NOTES: '临时任务',
 };
 
-const ITEM_HEADERS = ['项目名称', '创建日期', '排序'];
+const ITEM_HEADERS = ['项目名称', '创建日期', '排序', '归档日期'];
 const RECORD_HEADERS = ['日期', '项目名称', '状态', '完成时间', '备注'];
 const NOTE_HEADERS = ['日期', '内容', '状态', '完成时间', '创建时间'];
 const TODO_HEADERS = [
   '标题', '背景', '目标', '行动', '结果', '阶段',
   '优先级', '状态', '完成时间', '创建时间', '截止日期',
-  '保持', '改进', '停止', '开始',
+  '保持', '改进', '停止', '开始', '归档日期',
 ];
 
 /* ==================== CSV 基础 ==================== */
@@ -200,6 +202,22 @@ function isDone(status) {
   return s === '已完成' || s === '✓' || s === '是' || s === '1' || s === 'true';
 }
 
+/**
+ * 归档列：已归档就写归档日期（未归档留空）。
+ * 归档但日期缺失的外来数据补成今天，保证「导出 → 导入」不会把归档状态走丢。
+ */
+function archivedCell(entry) {
+  if (!entry || entry.archived !== true) return '';
+  const s = String(entry.archivedAt || '').slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : formatDateOnly(new Date());
+}
+
+/** CSV 的「归档日期」列 → 归档日期字符串；空或非法即未归档 */
+function archivedFromCell(cell) {
+  const s = String(cell == null ? '' : cell).trim().slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : '';
+}
+
 /* ==================== 导出 ==================== */
 
 /**
@@ -221,7 +239,7 @@ export function buildAllCSV() {
   lines.push(`[${SECTION.ITEMS}]`);
   lines.push(csvRow(ITEM_HEADERS));
   items.forEach((it) => {
-    lines.push(csvRow([it.name, it.createdAt || '', it.order != null ? it.order : '']));
+    lines.push(csvRow([it.name, it.createdAt || '', it.order != null ? it.order : '', archivedCell(it)]));
   });
   lines.push('');
 
@@ -270,6 +288,7 @@ export function buildAllCSV() {
       r.improve || '',
       r.stop || '',
       r.start || '',
+      archivedCell(t),
     ]));
   });
   lines.push('');
@@ -362,10 +381,13 @@ export function parseBackupCSV(text) {
       if (!name) return;
       const orderRaw = String(r['排序'] || '').trim();
       const order = orderRaw !== '' && Number.isFinite(Number(orderRaw)) ? Number(orderRaw) : undefined;
+      const archivedAt = archivedFromCell(r['归档日期']);
       items.push({
         name,
         createdAt: String(r['创建日期'] || '').trim(),
         order,
+        archived: !!archivedAt,
+        archivedAt,
       });
     });
   }
@@ -393,6 +415,7 @@ export function parseBackupCSV(text) {
     secTodos.rows.forEach((r) => {
       const title = String(r['标题'] || '').trim();
       if (!title) return;
+      const archivedAt = archivedFromCell(r['归档日期']);
       todos.push({
         title,
         description: {
@@ -413,6 +436,8 @@ export function parseBackupCSV(text) {
           stop: String(r['停止'] || '').trim(),
           start: String(r['开始'] || '').trim(),
         },
+        archived: !!archivedAt,
+        archivedAt,
       });
     });
   }
@@ -504,12 +529,23 @@ export function restoreData(parsed, mode) {
 
 /**
  * 当前本地数据概览
+ *
+ * itemCount / todoCount 只数「界面上看得见的」（未归档），归档项单列成 archived*Count，
+ * 否则数据管理里显示的数量会和页面上的列表对不上，用户会以为丢了数据。
+ * recordCount 仍是全量：归档项的历史记录确实占着空间，也要算进备份体积。
  */
 export function getDataOverview() {
   const items = getCheckinItems();
   const records = getCheckinRecords();
   const todos = getTodos();
   const quickNotes = getAllQuickNotes();
+
+  const activeItems = items.filter((i) => !i.archived);
+  const archivedItems = items.filter((i) => i.archived === true);
+  const activeTodos = todos.filter((t) => !t.archived);
+  const archivedTodos = todos.filter((t) => t.archived === true);
+  const archivedIds = {};
+  archivedItems.forEach((i) => { archivedIds[i.id] = true; });
 
   let noteCount = 0;
   let noteDone = 0;
@@ -521,6 +557,7 @@ export function getDataOverview() {
   });
 
   let recordCount = 0;
+  let archivedRecordCount = 0;
   const dates = [];
   Object.keys(records).forEach((date) => {
     const day = records[date];
@@ -530,6 +567,7 @@ export function getDataOverview() {
       const v = day[k];
       if (v && (v === true || v.completed !== false)) {
         recordCount += 1;
+        if (archivedIds[k]) archivedRecordCount += 1;
         hasAny = true;
       }
     });
@@ -538,14 +576,61 @@ export function getDataOverview() {
   dates.sort();
 
   return {
-    itemCount: items.length,
+    itemCount: activeItems.length,
     recordCount,
     dayCount: dates.length,
     firstDay: dates[0] || '',
     lastDay: dates[dates.length - 1] || '',
-    todoCount: todos.length,
-    todoDone: todos.filter((t) => t.completed).length,
+    todoCount: activeTodos.length,
+    todoDone: activeTodos.filter((t) => t.completed).length,
     noteCount,
     noteDone,
+    archivedItemCount: archivedItems.length,
+    archivedRecordCount,
+    archivedTodoCount: archivedTodos.length,
   };
+}
+
+/**
+ * 归档清单：数据管理界面「归档」区块的数据来源。
+ * 只读，不做任何写操作；带上的都是恢复/删除决策要看的量（历史条数、最近记录日、完成状态）。
+ * @returns {{items:Array, todos:Array}}
+ */
+export function getArchiveInventory() {
+  const records = getCheckinRecords();
+
+  const items = getArchivedCheckinItems().map((item) => {
+    let count = 0;
+    let lastDate = '';
+    Object.keys(records).sort().forEach((date) => {
+      const v = records[date] && records[date][item.id];
+      if (v && (v === true || v.completed !== false)) {
+        count += 1;
+        lastDate = date;
+      }
+    });
+    return {
+      id: item.id,
+      name: item.name,
+      createdAt: item.createdAt || '',
+      archivedAt: item.archivedAt || '',
+      recordCount: count,
+      lastRecordDate: lastDate,
+    };
+  });
+
+  const todos = getArchivedTodos().map((todo) => ({
+    id: todo.id,
+    title: todo.title,
+    createdAt: todo.createdAt || '',
+    archivedAt: todo.archivedAt || '',
+    completed: !!todo.completed,
+    completedTime: todo.completedTime || '',
+    dueDate: todo.dueDate || '',
+    priority: todo.priority || 'not_urgent_important',
+    phaseTotal: (todo.phases || []).length,
+    phaseDone: (todo.phases || []).filter((p) => p.completed).length,
+  }));
+
+  return { items, todos };
 }

@@ -56,7 +56,11 @@ let storedSnapshot = {
 
 /* 先导入 storage：模块导入期的 migrateIfNeeded 此刻还没有任何订阅者 */
 const storage = await import('../src/utils/storage.js');
-const { addTodo, getTodos, addCheckinItem, addQuickNote, getAllQuickNotes } = storage;
+const {
+  addTodo, getTodos, addCheckinItem, addQuickNote, getAllQuickNotes,
+  archiveCheckinItem, archiveTodo, getCheckinStats,
+  getActiveCheckinItems, getArchivedCheckinItems, getActiveTodos, getArchivedTodos,
+} = storage;
 
 /* 再导入 persistence：此刻才挂上写库监听 */
 const { initPersistence, flushNow } = await import('../src/utils/persistence.js');
@@ -135,6 +139,50 @@ try {
   assert.deepEqual(writes, [], '收到的就是文件内容，不该再落一次盘引发布多余推送');
   assert.deepEqual(getAllQuickNotes(), {}, '快照是整份替换：云端那份没有 quickNotes，本机也不该留');
   console.log('OK: 云端快照应用后刷新，且不产生回写');
+
+  /* ---- 6.5 归档标记必须跟着快照走：漏一个字段，归档项就会在另一台设备上自己冒回界面 ---- */
+  writes.length = 0;
+  listeners.apply({
+    schemaVersion: 2,
+    exportDate: '2026-10-10T00:00:00.000Z',
+    updatedAt: '2026-10-10T00:00:00.000Z',
+    items: [
+      { id: 'i-live', name: '在册项目', createdAt: '2026-10-01', order: 0 },
+      { id: 'i-arch', name: '归档项目', createdAt: '2026-09-01', order: 1, archived: true, archivedAt: '2026-10-09' },
+    ],
+    records: { '2026-10-08': { 'i-arch': { completed: true, time: '07:00', note: '归档前的历史' } } },
+    todos: [
+      { id: 't-live', title: '在册待办', completed: false, description: {}, phases: [] },
+      { id: 't-arch', title: '归档待办', completed: true, description: {}, phases: [], archived: true, archivedAt: '2026-10-09' },
+    ],
+  });
+  await sleep(500);
+  assert.deepEqual(getActiveCheckinItems().map((i) => i.name), ['在册项目'], '云端归档项回填后不应出现在可见列表');
+  assert.deepEqual(getArchivedCheckinItems().map((i) => i.name), ['归档项目'], '归档项要能在归档清单里查到');
+  assert.deepEqual(getActiveTodos().map((t) => t.title), ['在册待办'], '云端归档待办回填后不应出现在可见列表');
+  assert.equal(getArchivedTodos()[0].archivedAt, '2026-10-09', '归档日期要随快照一起回填');
+  assert.deepEqual(writes, [], '回填仍不该产生回写');
+  // 归档日之前（10-08）的历史照旧参与统计，归档日（10-09）起不再计入分母
+  const statBefore = getCheckinStats('2026-10-08');
+  assert.deepEqual(
+    { total: statBefore.total, completed: statBefore.completed },
+    { total: 2, completed: 1 },
+    '归档项在归档日之前的历史必须照旧统计',
+  );
+  assert.equal(getCheckinStats('2026-10-09').total, 1, '归档日起项目不再计入当日分母');
+
+  writes.length = 0;
+  archiveCheckinItem('i-live');
+  archiveTodo('t-live');
+  await sleep(500);
+  assert.equal(writes.length, 1, '归档是一笔数据改动，必须触发落盘');
+  const archPayload = writes[0][1];
+  const archItem = archPayload.items.find((i) => i.id === 'i-live');
+  assert.equal(archItem.archived, true, '快照必须带 archived，否则同步到另一台设备时归档状态会丢');
+  assert.match(archItem.archivedAt, /^\d{4}-\d{2}-\d{2}$/, '快照必须带合法归档日期');
+  const archTodoRow = archPayload.todos.find((t) => t.id === 't-live');
+  assert.equal(archTodoRow.archived, true, '待办的归档标记同样要进快照');
+  console.log('OK: 归档标记随快照双向流转，回填后的可见列表、归档清单与历史统计都正确');
 
   /* ---- 7. 缺少同步通道（旧版桥）时退回安全行为 ---- */
   delete window.daymark.saveSnapshotSync;

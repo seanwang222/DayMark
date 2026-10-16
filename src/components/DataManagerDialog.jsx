@@ -8,6 +8,8 @@ import {
   Typography,
   Button,
   Divider,
+  IconButton,
+  Tooltip,
   ToggleButton,
   ToggleButtonGroup,
   LinearProgress,
@@ -15,13 +17,24 @@ import {
 import DownloadIcon from '@mui/icons-material/Download';
 import UploadIcon from '@mui/icons-material/Upload';
 import SettingsBackupRestoreIcon from '@mui/icons-material/SettingsBackupRestore';
+import ArchiveIcon from '@mui/icons-material/Archive';
+import UnarchiveIcon from '@mui/icons-material/Unarchive';
+import DeleteIcon from '@mui/icons-material/Delete';
 import {
   exportAllCSV,
   exportBackupJSON,
   readBackupFile,
   restoreData,
   getDataOverview,
+  getArchiveInventory,
 } from '../utils/backup';
+import {
+  unarchiveCheckinItem,
+  unarchiveTodo,
+  deleteCheckinItem,
+  deleteTodo,
+} from '../utils/storage';
+import ConfirmDialog from './ConfirmDialog';
 import { flushNow } from '../utils/persistence';
 import SmartSyncPanel from './SyncPanel';
 
@@ -38,6 +51,43 @@ const FAINT = '#6e7681';
 const BLUE = '#1f6feb';
 const GREEN = '#3fb950';
 const RED = '#f85149';
+
+function ArchiveRow({ primary, meta, onRestore, onDelete }) {
+  return (
+    <Box
+      sx={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 1,
+        py: 0.9,
+        borderBottom: `1px solid ${BORDER}`,
+        '&:last-child': { borderBottom: 'none' },
+      }}
+    >
+      <Box sx={{ flex: 1, minWidth: 0 }}>
+        <Typography
+          variant="body2"
+          sx={{ color: TEXT, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+        >
+          {primary}
+        </Typography>
+        <Typography variant="caption" sx={{ color: FAINT, display: 'block', mt: 0.2 }}>
+          {meta}
+        </Typography>
+      </Box>
+      <Tooltip title="恢复显示">
+        <IconButton size="small" onClick={onRestore} sx={{ color: MUTED, '&:hover': { color: GREEN } }}>
+          <UnarchiveIcon fontSize="small" />
+        </IconButton>
+      </Tooltip>
+      <Tooltip title="彻底删除">
+        <IconButton size="small" onClick={onDelete} sx={{ color: MUTED, '&:hover': { color: RED } }}>
+          <DeleteIcon fontSize="small" />
+        </IconButton>
+      </Tooltip>
+    </Box>
+  );
+}
 
 function countRecords(records) {
   let n = 0;
@@ -102,25 +152,64 @@ function DataManagerDialog({ open, onClose }) {
   const fileRef = useRef(null);
 
   const [overview, setOverview] = useState(() => getDataOverview());
+  const [archive, setArchive] = useState(() => getArchiveInventory());
   const [mode, setMode] = useState('merge');
   const [parsed, setParsed] = useState(null);
   const [fileName, setFileName] = useState('');
   const [error, setError] = useState('');
   const [result, setResult] = useState(null);
   const [busy, setBusy] = useState(false);
+  // 归档区里的恢复 / 彻底删除：改动已经写进 localStorage，但背后的页面要刷新才看得见
+  const [dataTouched, setDataTouched] = useState(false);
+  const [pendingDelete, setPendingDelete] = useState(null);
 
   // 每次打开重新读取概览并清空临时状态
   useEffect(() => {
     if (open) {
       setOverview(getDataOverview());
+      setArchive(getArchiveInventory());
       setMode('merge');
       setParsed(null);
       setFileName('');
       setError('');
       setResult(null);
       setBusy(false);
+      setDataTouched(false);
+      setPendingDelete(null);
     }
   }, [open]);
+
+  const refreshArchive = () => {
+    setArchive(getArchiveInventory());
+    setOverview(getDataOverview());
+  };
+
+  /** 恢复一条归档：只清掉归档标记，历史数据一直在原处，所以恢复后连旧账一起回来 */
+  const handleRestoreArchived = (kind, entry) => {
+    if (kind === 'item') unarchiveCheckinItem(entry.id);
+    else unarchiveTodo(entry.id);
+    setDataTouched(true);
+    refreshArchive();
+  };
+
+  const askDeleteArchived = (kind, entry) => {
+    setPendingDelete({
+      kind,
+      id: entry.id,
+      message: kind === 'item'
+        ? `确定彻底删除已归档的打卡项目「${entry.name}」吗？它的 ${entry.recordCount} 条打卡记录将一并删除，且无法恢复。`
+        : `确定彻底删除已归档的待办「${entry.title}」吗？其 STAR 描述、行动清单与复盘将一并删除，且无法恢复。`,
+    });
+  };
+
+  const confirmDeleteArchived = () => {
+    if (!pendingDelete) return;
+    if (pendingDelete.kind === 'item') deleteCheckinItem(pendingDelete.id);
+    else deleteTodo(pendingDelete.id);
+    setPendingDelete(null);
+    setDataTouched(true);
+    refreshArchive();
+  };
 
   const pending = parsed
     ? {
@@ -179,6 +268,7 @@ function DataManagerDialog({ open, onClose }) {
       setParsed(null);
       setFileName('');
       setOverview(getDataOverview());
+      setArchive(getArchiveInventory());
     } catch (err) {
       setError(err && err.message ? err.message : '恢复失败。');
     } finally {
@@ -186,10 +276,10 @@ function DataManagerDialog({ open, onClose }) {
     }
   };
 
-  // 有恢复结果时，关闭即刷新页面，让所有组件重新读取最新数据
+  // 备份恢复或归档区的改动都只进了 localStorage，关闭时刷新页面，让所有组件重新读取最新数据
   const handleClose = () => {
-    if (result) {
-      // 恢复走的是防抖落盘， reload 会掐掉未触发的定时器 —— 先同步写一次文件
+    if (result || dataTouched) {
+      // 这两条路径都走防抖落盘，reload 会掐掉未触发的定时器 —— 先同步写一次文件
       flushNow();
       window.location.reload();
       return;
@@ -200,6 +290,8 @@ function DataManagerDialog({ open, onClose }) {
   const dayRange = overview.dayCount
     ? `${overview.firstDay} ~ ${overview.lastDay}`
     : '暂无记录';
+
+  const archiveTotal = archive.items.length + archive.todos.length;
 
   return (
     <Dialog
@@ -224,7 +316,11 @@ function DataManagerDialog({ open, onClose }) {
       <DialogContent dividers sx={{ borderColor: BORDER }}>
         {/* ===== 概览 ===== */}
         <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap' }}>
-          <StatCard label="打卡项目" value={overview.itemCount} sub="项" />
+          <StatCard
+            label="打卡项目"
+            value={overview.itemCount}
+            sub={overview.archivedItemCount ? `项 · 归档 ${overview.archivedItemCount}` : '项'}
+          />
           <StatCard
             label="打卡记录"
             value={overview.recordCount}
@@ -233,7 +329,11 @@ function DataManagerDialog({ open, onClose }) {
           <StatCard
             label="待办事项"
             value={overview.todoCount}
-            sub={`已完成 ${overview.todoDone} 条`}
+            sub={
+              overview.archivedTodoCount
+                ? `已完成 ${overview.todoDone} · 归档 ${overview.archivedTodoCount}`
+                : `已完成 ${overview.todoDone} 条`
+            }
           />
           <StatCard
             label="临时任务"
@@ -243,6 +343,9 @@ function DataManagerDialog({ open, onClose }) {
         </Box>
         <Typography variant="caption" sx={{ color: FAINT, display: 'block', mt: 1 }}>
           记录日期范围：{dayRange}
+          {overview.archivedRecordCount
+            ? ` · 其中 ${overview.archivedRecordCount} 条属于已归档的打卡项`
+            : ''}
         </Typography>
 
         <Divider sx={{ my: 2, borderColor: BORDER }} />
@@ -252,7 +355,8 @@ function DataManagerDialog({ open, onClose }) {
           导出
         </Typography>
         <Typography variant="caption" sx={{ color: FAINT, display: 'block', mb: 1.5 }}>
-          CSV 为单文件，含打卡项目、打卡记录、待办事项三个区块，可直接用 Excel 打开；
+          CSV 为单文件，含打卡项目、打卡记录、待办事项、临时任务四个区块，已归档的数据同样在内
+          （靠「归档日期」列标记），可直接用 Excel 打开；
           JSON 为无损备份，换设备或跨浏览器迁移请用 JSON。
         </Typography>
         <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1.5 }}>
@@ -416,13 +520,85 @@ function DataManagerDialog({ open, onClose }) {
           </Notice>
         )}
 
+        {/* ===== 归档 ===== */}
+        <Divider sx={{ my: 2, borderColor: BORDER }} />
+
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8, mb: 0.5 }}>
+          <ArchiveIcon fontSize="small" sx={{ color: MUTED }} />
+          <Typography sx={{ color: TEXT, fontWeight: 600, fontSize: '0.9rem' }}>
+            归档
+          </Typography>
+          {archiveTotal > 0 && (
+            <Typography variant="caption" sx={{ color: FAINT }}>{archiveTotal} 条</Typography>
+          )}
+        </Box>
+        <Typography variant="caption" sx={{ color: FAINT, display: 'block', mb: 1 }}>
+          归档表示阶段性收尾：打卡项与待办归档后不再出现在界面上，但归档日之前的历史记录照旧参与统计。
+          在这里「恢复」即回到界面（旧账一并回来），「彻底删除」会连打卡记录 / STAR 与复盘一起删掉，无法恢复。
+        </Typography>
+
+        {archiveTotal === 0 ? (
+          <Typography variant="caption" sx={{ color: '#484f58', display: 'block' }}>
+            还没有归档数据 —— 打卡项与待办卡片右侧都有归档按钮。
+          </Typography>
+        ) : (
+          <Box sx={{ bgcolor: '#0d1117', border: `1px solid ${BORDER}`, borderRadius: '16px', px: 1.5, pb: 0.5 }}>
+            {archive.items.length > 0 && (
+              <Box>
+                <Typography variant="caption" sx={{ color: MUTED, fontWeight: 700, display: 'block', mt: 1 }}>
+                  打卡项目（{archive.items.length}）
+                </Typography>
+                {archive.items.map((it) => (
+                  <ArchiveRow
+                    key={it.id}
+                    primary={it.name}
+                    meta={`归档于 ${it.archivedAt || '—'} · 历史打卡 ${it.recordCount} 条${it.lastRecordDate ? `（最近 ${it.lastRecordDate}）` : ''} · 创建于 ${String(it.createdAt || '—').slice(0, 10)}`}
+                    onRestore={() => handleRestoreArchived('item', it)}
+                    onDelete={() => askDeleteArchived('item', it)}
+                  />
+                ))}
+              </Box>
+            )}
+            {archive.todos.length > 0 && (
+              <Box>
+                <Typography variant="caption" sx={{ color: MUTED, fontWeight: 700, display: 'block', mt: 1 }}>
+                  待办事项（{archive.todos.length}）
+                </Typography>
+                {archive.todos.map((td) => (
+                  <ArchiveRow
+                    key={td.id}
+                    primary={td.title}
+                    meta={[
+                      `归档于 ${td.archivedAt || '—'}`,
+                      td.completed ? '已完成' : '未完成',
+                      td.phaseTotal ? `行动 ${td.phaseDone}/${td.phaseTotal}` : '',
+                      td.dueDate ? `截止 ${td.dueDate}` : '',
+                      `创建于 ${String(td.createdAt || '—').slice(0, 10)}`,
+                    ].filter(Boolean).join(' · ')}
+                    onRestore={() => handleRestoreArchived('todo', td)}
+                    onDelete={() => askDeleteArchived('todo', td)}
+                  />
+                ))}
+              </Box>
+            )}
+          </Box>
+        )}
+
         {/* ===== 桌面版：本机文件保存 + WebDAV 云同步（浏览器版不显示） ===== */}
         <SmartSyncPanel />
+
+        <ConfirmDialog
+          open={!!pendingDelete}
+          title="彻底删除归档数据"
+          message={pendingDelete ? pendingDelete.message : ''}
+          onConfirm={confirmDeleteArchived}
+          onClose={() => setPendingDelete(null)}
+        />
       </DialogContent>
 
       <DialogActions sx={{ borderColor: BORDER, p: 1.5 }}>
         <Button onClick={handleClose} sx={{ color: MUTED, fontWeight: 600 }}>
-          {result ? '关闭并刷新' : '关闭'}
+          {(result || dataTouched) ? '关闭并刷新' : '关闭'}
         </Button>
       </DialogActions>
     </Dialog>

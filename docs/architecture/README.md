@@ -33,7 +33,7 @@ flowchart LR
 |---|---|---|
 | [落盘时序](persistence.md) | localStorage → `userData/daymark-snapshot.json`：回填、防抖、原子写、`beforeunload` 兜底 | `npm run verify:persistence` |
 | [WebDAV 同步链路](sync.md) | 本机快照 ↔ 云端：`planPull` / `planPush` 决策、备份留档、路径编码、超时 | `npm run verify:webdav` + `npm run verify:config` |
-| [统计口径](stats.md) | 完成率分母、未来日排除、连续天数、逾期判定、提醒排序、频率色阶 | `npm run verify:stats` + `npm run verify:todo` |
+| [统计口径](stats.md) | 完成率分母与「在册区间」（创建日 → 归档日前一天）、统计卡如何按月度/季度/年度区间取数、未来日排除、连续天数、归档与界面可见性、逾期判定、提醒排序、频率色阶 | `npm run verify:stats` + `npm run verify:todo` |
 
 ## 进程边界只有一道
 

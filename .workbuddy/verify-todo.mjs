@@ -17,7 +17,10 @@ globalThis.localStorage = {
   clear: () => { Object.keys(store).forEach((k) => delete store[k]); },
 };
 
-const { addTodo, editTodo, getTodos, toggleTodo, toggleTodoPhase, isPastDue, getUpcomingPhases } = await import('../src/utils/storage.js');
+const {
+  addTodo, editTodo, getTodos, toggleTodo, toggleTodoPhase, isPastDue, getUpcomingPhases,
+  getActiveTodos, getArchivedTodos, archiveTodo, unarchiveTodo, reorderTodos,
+} = await import('../src/utils/storage.js');
 
 const KISM = { keep: '早起', improve: '排期', stop: '熬夜', start: '复盘' };
 
@@ -167,6 +170,83 @@ function makeCompletedTodo() {
   // 窗口收窄到 2 天：只剩逾期与今天
   assert.deepEqual(getUpcomingPhases(2, todayStr).map((x) => x.daysLeft), [-5, -2, 0], '窗口收窄后不应包含 2 天以外的行动项');
   console.log('OK: 一周提醒按紧急度升序、逾期置顶且正确排除窗口外/无截止日/已完成');
+}
+
+/* ---- 7. 归档待办：退出界面与提醒，但 STAR / 行动 / 复盘一条不少 ---- */
+{
+  localStorage.clear();
+  const pad = (n) => String(n).padStart(2, '0');
+  const shift = (days) => {
+    const d = new Date();
+    d.setDate(d.getDate() + days);
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  };
+  const todayStr = shift(0);
+
+  addTodo({
+    title: '已完成的待办',
+    description: { situation: '背景A', target: '目标A', result: '结果A' },
+    priority: 'urgent_important',
+    phases: [{ name: '行动A', dueDate: shift(2) }],
+  });
+  addTodo({
+    title: '收尾的待办',
+    description: { situation: '背景B' },
+    priority: 'not_urgent_important',
+    phases: [{ name: '行动B', dueDate: shift(1) }],
+  });
+  const [doneOne, toArchive] = getTodos();
+  toggleTodo(doneOne.id, { completedTime: '18:00', review: { ...KISM } });
+
+  // 归档前：未完成的 toArchive 那条行动要在提醒里（doneOne 已完成，其行动按口径不提醒）
+  assert.deepEqual(
+    getUpcomingPhases(7, todayStr).map((x) => x.phase.name),
+    ['行动B'],
+    '归档前应能提醒到 行动B',
+  );
+
+  archiveTodo(toArchive.id);
+  assert.equal(getTodos().length, 2, '归档不是删除：底层数组仍要有两条');
+  assert.equal(getActiveTodos().length, 1, '界面只该看得见未归档的那条');
+  assert.equal(getActiveTodos()[0].id, doneOne.id);
+  assert.deepEqual(getArchivedTodos().map((t) => t.title), ['收尾的待办']);
+
+  // 提醒（日程页「提醒」的数据源）不得再吐出归档待办的行动
+  assert.deepEqual(
+    getUpcomingPhases(7, todayStr).map((x) => x.phase.name),
+    [],
+    '归档待办的行动不应再进提醒',
+  );
+
+  // 归档不得改动脉冲状态与任何内容字段
+  const archivedRaw = getTodos().find((t) => t.id === toArchive.id);
+  assert.equal(archivedRaw.archived, true);
+  assert.match(archivedRaw.archivedAt, /^\d{4}-\d{2}-\d{2}$/, '归档日应为合法日期');
+  assert.equal(archivedRaw.description.situation, '背景B', '归档不得丢 STAR 描述');
+  assert.equal(archivedRaw.phases[0].name, '行动B', '归档不得丢行动清单');
+  archiveTodo(doneOne.id);
+  const archivedDone = getTodos().find((t) => t.id === doneOne.id);
+  assert.equal(archivedDone.completed, true, '归档不得改动完成状态');
+  assert.equal(archivedDone.completedTime, '18:00', '归档不得清空完成时间');
+  assert.deepEqual(archivedDone.review, KISM, '归档不得清空复盘');
+
+  // 界面拖拽只会传「可见项」的 id：归档项没被传到，也不该被顺手抹掉
+  unarchiveTodo(doneOne.id); // 此刻 doneOne 可见、toArchive 仍是归档态
+  assert.deepEqual(getActiveTodos().map((t) => t.id), [doneOne.id]);
+  reorderTodos(getActiveTodos().map((t) => t.id));
+  assert.equal(getTodos().length, 2, 'reorderTodos 不得把没传入的归档待办从存储里抹掉');
+  assert.equal(getTodos().find((t) => t.id === toArchive.id).archived, true, '排序后归档状态应原样保留');
+  assert.deepEqual(getTodos().map((t) => t.order).sort((a, b) => a - b), [0, 1], 'order 应保持连续');
+
+  // 取消归档：字段整体消失，内容原样回到界面
+  unarchiveTodo(toArchive.id);
+  assert.equal(getActiveTodos().length, 2, '恢复后应重新可见');
+  assert.equal(getArchivedTodos().length, 0);
+  const restored = getTodos().find((t) => t.id === toArchive.id);
+  assert.equal(restored.archived, undefined, '取消归档应删掉 archived 字段');
+  assert.equal(restored.archivedAt, undefined, '取消归档应删掉 archivedAt 字段');
+  assert.equal(restored.description.situation, '背景B');
+  console.log('OK: 归档待办退出界面与提醒，内容与顺序不受损，恢复即原样回来');
 }
 
 console.log('\n全部验证通过 ✅');

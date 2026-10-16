@@ -4,38 +4,43 @@
 
 `src/utils/storage.js` 是唯一的口径实现，视图层只做汇总与着色。
 
-## 口径的两条排除规则
+## 口径的三条排除规则
 
-`getMonthlyData(year, month, itemId)`（`storage.js:395`）逐日生成 `{ date, completed, total, rate, excluded? }`：
+`getMonthlyData(year, month, itemId)`（`storage.js:486`）逐日生成 `{ date, completed, total, rate, excluded? }`：
 
 ```mermaid
 flowchart TD
   A[某天 dateStr] --> B{单项目模式且<br/>dateStr < 项目创建日?}
-  B -- 是 --> E1["excluded: true<br/>total=completed=rate=0（:414-415）"]
-  B -- 否 --> C["active = 当天已存在的项目<br/>!createdAt 或 createdAt ≤ 当天（:422）"]
+  B -- 是 --> E1["excluded: true<br/>total=completed=rate=0"]
+  B -- 否 --> C["active = 当天在册的项目<br/>isItemActiveOn(i, dateStr)（:486 起循环内）"]
   C --> D{total 为 0<br/>或 dateStr > today?}
-  D -- 是 --> E2["excluded: true<br/>total=completed=rate=0（:424-427）"]
+  D -- 是 --> E2["excluded: true<br/>total=completed=rate=0"]
   D -- 否 --> F[正常计入：completed / total]
 ```
 
-1. **分母只算「当天已经存在的打卡项」**：`storage.js:422` 的 `list.filter((i) => !i.createdAt || i.createdAt.slice(0,10) <= dateStr)`。晚建的项目不配在诞生前被记为「未完成」。
-2. **未到来的日子不参与统计**：`dateStr > today` 同样标 `excluded`（`:424`）。
+1. **分母只算「当天在册的打卡项」**：判定收敛在唯一入口 `isItemActiveOn(item, dateStr)`（`storage.js:119`）——`createdAt ≤ 当天`。晚建的项目不配在诞生前被记为「未完成」。
+2. **归档日及以后同样不在册**：同一函数里 `archived` 为真时要求 `当天 < archivedAt`，即项目的在册区间是「创建日 → 归档日前一天」。归档当天起它不再进入任何分母，也不会把往年月份的数字追溯改写。已归档但没有归档日期（外来的脏数据）按「全程不在册」处理，宁可少算也不凭空拉低完成率。
+3. **未到来的日子不参与统计**：`dateStr > today` 同样标 `excluded`。
 
-`:419-421` 的注释写了不改的后果：多项视图里晚建的项目会**系统性拉低**完成率，跨年视图更是把整个未来月份算成一堆 0%。
+三条规则同时被 `getCheckinStats`（`storage.js:457`，逐日分母）、`getMonthlyData`（在册判定在 `:515`）、`getOverallStats`、`getItemStats` 与 `CheckinCalendar` 消费。**不要在任何现场重写这套比较**，新需求请扩 `isItemActiveOn`。
 
-单项目模式的统计起点是项目创建日（`:403-407` 的 `sinceDate`）；`itemId` 不传时行为与历史一致（`:392`）。
+`excluded` 靠「加 0」生效：季/年视图**不重新判口径**，而是从月数据汇总——`getQuarterlyData`（`:547`）在 `:555` 调 `getMonthlyData`，`getYearlyData`（`:580`）在 `:586` 调用，各自 `reduce` 出月 `completed/total/rate` 与 `avgRate`。调用点在 `src/pages/CheckinPage.jsx` 的 `useMemo`。因为 `excluded` 那天的 `total` 与 `completed` 都是 0，聚合时「加 0」天然无贡献，**没人需要显式过滤 `excluded`**。跨年也不特殊：季度循环的月份恒在同一 `year`，跨年只发生在界面导航。
 
-## `excluded` 靠「加 0」生效，渲染层不读它
+## 统计卡只算所选区间
 
-季/年视图**不重新判口径**，而是从月数据汇总：`getQuarterlyData`（`:454`）在 `:462` 调 `getMonthlyData`，`getYearlyData`（`:487`）在 `:493` 调用，各自 `reduce` 出月 `completed/total/rate` 与 `avgRate`（`:467-479`、`:498-509`）。调用点在 `src/pages/CheckinPage.jsx:111` 与 `:115` 的 `useMemo`。
+`getViewRange(view, year, month, quarter)`（`storage.js:619`）把「月度 / 季度 / 年度」翻译成一个闭区间 `{ start, end }`（月末按真实天数，闰年 2 月为 `02-29`）。界面拿它去调 `getItemStats(itemId, range)`（`:747`）与 `getOverallStats(range)`（`:783`）；不传 range 即全生命周期（创建日 → 今天），1.x 的老调用点行为不变。
 
-因为 `excluded` 那天的 `total` 与 `completed` 都是 0，聚合时「加 0」天然无贡献，**没人需要显式过滤 `excluded`**。跨年也不特殊：季度循环的月份恒在同一 `year`（`:455`、`:460`），跨年只发生在界面导航（`CheckinPage.jsx:266-284`，12 月→次年 1 月、Q4→次年 Q1）。
+两者都汇入同一个实现 `statsFromRange(start, end, classify, meta)`（`:646`）——**全应用唯一的汇总统计出口**：
 
-代价是 `excluded` 字段目前只有 `verify-stats` 在断言（`.workbuddy/verify-stats.mjs:76-79`、`:247`、`:250`），界面组件一个都不读。想区分「不参与」和「0%」，必须自己消费这个标记，别指望颜色。
+- `end` 一律裁剪到今天；`start > end`（区间整体在未来）直接返回 `empty: true`，四个指标全 0，界面显示「—」而不是「0%」。
+- `classify(dateStr)` 返回 `done | miss | skip`。`skip`（不在册、日子没到）的那天**既不进分母也不打断连续段**，所以「全部项目」里某天没有任何在册项目不会把连续切断。
+- 区间与在册区间求交：单项目 `start = max(range.start, createdAt)`，因此月度视图的分母是「当月已到来的天数」而不是「创建日至今的总天数」。
+- `meta` 由调用方补 `itemId / name / createdAt`，两个入口的返回结构同构。
+
 
 ## 不变式：单项目 `total` 之和 == 聚合 `total`
 
-改分母时最该守住的一条。`.workbuddy/verify-stats.mjs` 场景 I 逐日断言两者相等（`:258` 比 total、`:259` 比 completed），并在 `:270` 明确断言分母**不是**「天数 × 项目数」。
+改分母时最该守住的一条。`.workbuddy/verify-stats.mjs` 场景 I 逐日断言两者相等（`:281` 比 total、`:282` 比 completed），并在 `:293` 明确断言分母**不是**「天数 × 项目数」；场景 K 又对「一个在册 + 一个已归档」的组合重复了同一条对齐断言。
 
 ```bash
 npm run verify:stats
@@ -43,58 +48,75 @@ npm run verify:stats
 
 ## 连续天数：不能用循环结束时的 `running`
 
-`getItemStats(itemId)` 的当前连续判定（`storage.js:576-581`）：
+`statsFromRange`（`storage.js:646`）里的当前连续判定（`:712-713`）：
 
 ```
-streakEnd === today || streakEnd === yesterdayStr ? streakEndRun : 0
+streakEnd === end || streakEnd === formatDate(prevDay) ? streakEndRun : 0
 ```
 
-配套变量 `streakEnd` / `streakEndRun` 在 `:549-552` 声明、`:566-567` 与命中日同步更新；聚合口径里同一对变量在 `:647-648` 与 `:659-660`，判定在 `:669-674`。
+`end` 是**裁剪到今天的区间末**，`prevDay` 是它的前一天。配套变量 `streakEnd` / `streakEndRun` 在 `:685` 声明、`:698-699` 与命中日同步更新。
 
-`:550-551` 的注释解释了为什么不能用循环结束时的 `running`：**今天还没打卡时 `running` 已经被重置为 0**，而「今天未打卡但昨天连着」按产品语义不算中断。这条语义由 `verify-stats` 场景 C（`:151-169`，断言在 `:167`）与场景 A（`:123`）、场景 G（`:218`）锁住。
+`:683-684` 的注释解释了为什么不能用循环结束时的 `running`：**区间末当天还没打卡时 `running` 已经被重置为 0**，而「当天未打卡但前一天连着」按产品语义不算中断。这条语义由 `verify-stats` 的场景 C（今天未打卡、昨天连着）与场景 A（连续段已断在两天前）、场景 G（聚合口径）、场景 J（连续段按区间截断）锁住。
+
+区间截断是 1.1.2 起的行为：月度视图的最长连续不会超过当月在册天数；查看历史月份时，「当前连续」表示**截至该区间末尾**的连续段，而不是把今天的实时值搬过去。统计卡下方会跟着显示 `统计区间：起 ~ 止`，让数字的口径写在脸上。
+
+## 归档与界面可见性
+
+归档是**同一份数组上的两个字段**（`archived` / `archivedAt`），不是新的存储键，因此 `getAllData()`、`applySnapshot()`、快照落盘与 WebDAV 同步都不用改——字段是随对象整体搬运的。要盯着的是这三处：
+
+| 落点 | 位置 | 漏掉的后果 |
+|---|---|---|
+| 界面取数 | `getActiveCheckinItems()`（`storage.js:306`）/ `getActiveTodos()`（`:864`） | 页面仍用 `getCheckinItems()` / `getTodos()` → 归档项照常显示 |
+| 备份重建 | `normalizeTodo()`（`:1072`）与 `setAllData()`（`:1278`）的打卡项重建都是**白名单** | 归档状态在「导出 → 恢复」后被抹掉，归档项自己冒回界面 |
+| CSV 区块 | `src/utils/backup.js` 的 `ITEM_HEADERS` / `TODO_HEADERS` 与对应解析 | 只导出不解析，恢复时同样丢；旧备份缺列要能安全回落为未归档 |
+
+另有两处反面教材式的路径，改动时请一并检查：
+
+- `reorderCheckinItems()`（`:394`）与 `reorderTodos()`（`:1015`）：界面只会传「可见项」的 id，**不能**拿传入列表当整组数据写回，否则一次拖拽就把归档项从存储里抹掉。两个函数现在都是「先按传入顺序排，再把没点到的按原顺序追加」。
+- 归档 / 取消归档（`:322` / `:333` / `:880` / `:891`）：取消归档时是 `delete` 掉两个字段，而不是写 `false` / `''`。这样恢复后的项目与「从未归档过」逐字节等价，不会再被任何 `archived` 分支绊到。
+
+概览与归档清单的数据源在 `src/utils/backup.js`：`getDataOverview()` 的 `itemCount` / `todoCount` 只数未归档（界面看得见的那部分），归档量走 `archivedItemCount` / `archivedRecordCount` / `archivedTodoCount` 三个独立字段；`getArchiveInventory()` 为「数据管理 → 归档」区块提供带历史条数的清单。
 
 ## 「已过期」只有一个判定
 
-`isPastDue(completed, dueDate, todayStr)`（`storage.js:91-93`）：
+`isPastDue(completed, dueDate, todayStr)`（`storage.js:96-98`）：
 
 ```js
 !completed && !!dueDate && String(dueDate) < String(todayStr)
 ```
 
-**`!!dueDate` 不能省。** `:88-89` 给了理由：`YYYY-MM-DD` 字符串比较里，空串小于任何日期，直接写 `dueDate < todayStr` 会把**所有没有截止日的待办**标成过期。别在现场重写这套比较。
+**`!!dueDate` 不能省。** `:93-94` 给了理由：`YYYY-MM-DD` 字符串比较里，空串小于任何日期，直接写 `dueDate < todayStr` 会把**所有没有截止日的待办**标成过期。别在现场重写这套比较。
 
 ## 提醒列表：一个排序键
 
-`getUpcomingPhases(withinDays = 7, todayStr = getToday())`（`storage.js:71-84`）：
+`getUpcomingPhases(withinDays = 7, todayStr = getToday())`（`storage.js:76-89`）：
 
-- 剔除已完成待办（`:74`）、已完成或无截止日的行动（`:76`）、超出窗口的（`:78`）；
-- `daysLeft = daysBetween(todayStr, dueDate)`（`:77`），**逾期为负数**；
-- 比较器只有一处：`:82` 的 `a.daysLeft - b.daysLeft || title.localeCompare(title)`。逾期自然置顶，不需要单独的「逾期分组」。
+- 只遍历 `getActiveTodos()`（`:78`），归档待办连同它的行动一起退出提醒；
+- 剔除已完成待办（`:79`）、已完成或无截止日的行动（`:81`）、超出窗口的（`:83`）；
+- `daysLeft = daysBetween(todayStr, dueDate)`（`:82`），**逾期为负数**；
+- 比较器只有一处：`:87` 的 `a.daysLeft - b.daysLeft || title.localeCompare(title)`。逾期自然置顶，不需要单独的「逾期分组」。
 
-改窗口或改排序都去扩 `verify:todo` 第 6 组，不要在页面里另写一套。
+改窗口或改排序都去扩 `verify:todo` 第 6 组（归档排除锁在第 7 组），不要在页面里另写一套。
 
 ## 日期一律是本地日
 
-`getToday()`（`:49-55`）、`formatDate()`（`:100-105`）都用 `getFullYear/getMonth/getDate`，**没有 UTC 换算**；`daysBetween` 把 `${date}T00:00:00` 当本地零点解析（`:58-63`）。口径全部建立在「同一台机器的本地日」上，跨时区设备之间的比较不在设计范围内。
+`getToday()`（`:54-60`）、`formatDate()`（`:135-141`）都用 `getFullYear/getMonth/getDate`，**没有 UTC 换算**；`daysBetween` 把 `${date}T00:00:00` 当本地零点解析（`:63-68`）。口径全部建立在「同一台机器的本地日」上，跨时区设备之间的比较不在设计范围内。
 
 ## 两套颜色，不许混
 
 | 用途 | 实现 | 色相 |
 |---|---|---|
 | **完成频率色阶**（热力图、进度条） | `src/utils/colors.js:15-22` `getRateColor(rate)` | 纯蓝，`h=213` 固定（`:18`），`s = 60+35t`（`:19`）、`l = 22+36t`（`:20`），`t = clamp(rate,0,100)/100`（`:17`） |
-| **无数据 / 0%** | `RATE_COLOR_NONE = '#161b22'`（`colors.js:13`） | `rate == null \|\| rate <= 0` 时返回（`:16`） |
-| **状态语义（打卡成功、勾选完成）** | `CheckinItem.jsx:122`、`TodoCard.jsx:175` / `:308`、`CheckinPage.jsx:63`（StatCell highlight）与 `:340`（「今天」标签）、`SchedulePage.jsx:48` | 绿 `#3fb950` |
+| **无数据 / 0%** | `RATE_COLOR_NONE = '#161b22'`（`colors.js:13`） | `rate == null \|\| rate <= 0` 时返回（`:16`）；月历不再自己写死这个色 |
+| **不参与统计（excluded）** | `CheckinCalendar.jsx:72-76`、图例 `:112-115` | 无填充色：`bgcolor: transparent` + 虚线边框，与「0%」的实心 `#161b22` 区分开 |
+| **状态语义（打卡成功、勾选完成）** | `CheckinItem.jsx:124`、`TodoCard.jsx:177` / `:322`、`CheckinPage.jsx:64`（StatCell highlight）与 `:352`（「今天」标签）、`SchedulePage.jsx:55` | 绿 `#3fb950` |
 
-频率色阶的调用点：`CheckinCalendar.jsx:76`、`QuarterlyChart.jsx:65`、`YearlyChart.jsx:64`、`CheckinPage.jsx:381`。改配色只动 `colors.js` 与这几个调用点，**不要回到分档硬编码，也不要给频率引入青/绿**。
+频率色阶的调用点：`CheckinCalendar.jsx:76`、`QuarterlyChart.jsx:65`、`YearlyChart.jsx:64`、`CheckinPage.jsx:393`（今日进度条）。改配色只动 `colors.js` 与这几个调用点，**不要回到分档硬编码，也不要给频率引入青/绿**。
 
 ## 已知问题与文档差异（这一节是现状，不是目标）
 
-以下是本次读代码发现的、当前实现与 `AGENTS.md` / 设计意图不一致的地方，按严重度排：
+1. **`getRateGradient()`（`colors.js:25-28`）在 `src/` 内没有任何调用点**；实际图例是 5 档离散色块 `[10,30,50,70,90]`（`CheckinCalendar.jsx:118-120`）。
+2. 热力图里「完成率 0%（在册但一次没打）」与「项目当天还没创建」仍是两种含义，前者实心 `#161b22`、后者虚线空格——月历已经分开了，`QuarterlyChart` / `YearlyChart` 的柱状图没有「不参与」的表达，只是把 0 当成矮柱子。
+3. `AGENTS.md` 称「`getMonthlyData` 是唯一的口径实现」——从 1.1.2 起对月历热力图也成立（它改成直接消费 `getMonthlyData` 的输出，含 `excluded`）；汇总统计那一侧的唯一实现则是 `statsFromRange`，两者共用 `isItemActiveOn`。
 
-1. **月历热力图自己算了一套口径**（`CheckinCalendar.jsx:29-43`）。它只排除「项目创建日之前」（`:37`），**不排除未来日、也不读 `excluded`**。于是未来某天若已有项目存在，会得到 `total>0 / completed=0 / rate=0` → 被涂成 `#161b22`，视觉上与「已完成 0%」完全同色，而按 `getMonthlyData` 的口径这天根本不该参与统计。月历与「汇总统计」数字来自两套计算，这是当前最容易复发的一致性缺陷。
-2. **`RATE_COLOR_NONE` 没被复用**：`CheckinCalendar.jsx:76` 硬编码 `'#161b22'`，`colors.js` 里的常量只在 `colors.js:16` 自用。改「无数据」色时只改常量会漏掉月历。
-3. **`getRateGradient()`（`colors.js:25-28`）在 `src/` 内没有任何调用点**；实际图例是 5 档离散色块 `[10,30,50,70,90]`（`CheckinCalendar.jsx:112-114`）。
-4. **「无数据」与「完成率 0%」不可区分**：两者都落到 `#161b22`。设计说明里称该色用于「与低完成率区分」，而月历/热力图里没有第三种中性色表示「无数据」。
-5. `AGENTS.md:22` 称「`getMonthlyData` 是唯一的口径实现」——对季/年视图成立，对月历热力图**不成立**（见第 1 条）。
-
-修第 1 条的正确做法是让 `CheckinCalendar` 消费 `getMonthlyData` 的输出（含 `excluded`），而不是把那段 filter 抄一遍；改完必须同时跑 `verify:stats`。
+> 历史条目（1.1.1 及之前）：月历热力图曾自己算一套口径（只排除创建日之前，不排除未来日、不读 `excluded`），并且硬编码 `'#161b22'`。1.1.2 已修掉，做法正是「消费 `getMonthlyData` 而不是把 filter 抄一遍」，回归由 `verify:stats` 的场景 K 锁住。

@@ -9,6 +9,7 @@ import {
 } from '@mui/material';
 import ModeEditIcon from '@mui/icons-material/ModeEdit';
 import EditNoteIcon from '@mui/icons-material/EditNote';
+import ArchiveIcon from '@mui/icons-material/Archive';
 import DeleteIcon from '@mui/icons-material/Delete';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import RadioButtonUncheckedIcon from '@mui/icons-material/RadioButtonUnchecked';
@@ -37,6 +38,7 @@ function DragHandleIcon() {
  * @param {Function} onRequestComplete 请求完成回调 (item) => void
  * @param {Function} onCancelComplete 取消完成回调 (itemId) => void
  * @param {Function} onEdit 编辑回调
+ * @param {Function} onArchive 归档回调 (itemId) => void
  * @param {Function} onDelete 删除回调
  * @param {Function} onEditRecord 编辑打卡记录回调 (item, record) => void
  * @param {number} index 在列表中的索引
@@ -44,7 +46,7 @@ function DragHandleIcon() {
  * @param {Function} onDragOver
  * @param {Function} onDrop
  */
-function CheckinItem({ item, record, onRequestComplete, onCancelComplete, onEdit, onDelete, onEditRecord, index, onDragStart, onDragOver, onDrop }) {
+function CheckinItem({ item, record, onRequestComplete, onCancelComplete, onEdit, onArchive, onDelete, onEditRecord, index, onDragStart, onDragOver, onDrop }) {
   const completed = record && record.completed;
   const time = record && record.time;
   const note = record && record.note;
@@ -169,6 +171,18 @@ function CheckinItem({ item, record, onRequestComplete, onCancelComplete, onEdit
                   <ModeEditIcon fontSize="small" />
                 </IconButton>
               </Tooltip>
+              {/* 归档：阶段性任务告一段落，归档后不再出现在打卡列表与今日分母里 */}
+              {onArchive && (
+                <Tooltip title="归档（不再显示，可在数据管理里恢复）">
+                  <IconButton
+                    size="small"
+                    onClick={() => onArchive(item.id)}
+                    sx={{ color: '#8b949e', '&:hover': { color: '#58a6ff' } }}
+                  >
+                    <ArchiveIcon fontSize="small" />
+                  </IconButton>
+                </Tooltip>
+              )}
               <Tooltip title="删除">
                 <IconButton
                   size="small"

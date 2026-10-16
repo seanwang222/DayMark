@@ -13,6 +13,7 @@ import {
 } from '@mui/material';
 import ModeEditIcon from '@mui/icons-material/ModeEdit';
 import EditNoteIcon from '@mui/icons-material/EditNote';
+import ArchiveIcon from '@mui/icons-material/Archive';
 import DeleteIcon from '@mui/icons-material/Delete';
 import AccessTimeIcon from '@mui/icons-material/AccessTime';
 import EventIcon from '@mui/icons-material/Event';
@@ -52,6 +53,7 @@ const fmtMd = (s) => {
  * @param {Function} onRequestComplete
  * @param {Function} onCancelComplete
  * @param {Function} onEdit
+ * @param {Function} onArchive 归档回调 (todoId) => void
  * @param {Function} onDelete
  * @param {boolean} sidebarSelected
  * @param {number} index
@@ -60,7 +62,7 @@ const fmtMd = (s) => {
  * @param {Function} onDrop
  * @param {Function} onTogglePhase - 切换阶段完成状态
  */
-function TodoCard({ todo, onRequestComplete, onCancelComplete, onEdit, onDelete, onEditRecord, sidebarSelected, index, onDragStart, onDragOver, onDrop, onTogglePhase }) {
+function TodoCard({ todo, onRequestComplete, onCancelComplete, onEdit, onArchive, onDelete, onEditRecord, sidebarSelected, index, onDragStart, onDragOver, onDrop, onTogglePhase }) {
   const [phasesExpanded, setPhasesExpanded] = useState(false);
   const priority = TODO_PRIORITIES[todo.priority] || TODO_PRIORITIES.not_urgent_important;
   const desc = todo.description || {};
@@ -215,6 +217,18 @@ function TodoCard({ todo, onRequestComplete, onCancelComplete, onEdit, onDelete,
                   <ModeEditIcon fontSize="small" />
                 </IconButton>
               </Tooltip>
+              {/* 归档：阶段性收尾，归档后不再出现在列表、四象限与提醒里 */}
+              {onArchive && (
+                <Tooltip title="归档（不再显示，可在数据管理里恢复）">
+                  <IconButton
+                    size="small"
+                    onClick={() => onArchive(todo.id)}
+                    sx={{ color: '#8b949e', '&:hover': { color: '#58a6ff' } }}
+                  >
+                    <ArchiveIcon fontSize="small" />
+                  </IconButton>
+                </Tooltip>
+              )}
               <Tooltip title="删除">
                 <IconButton
                   size="small"

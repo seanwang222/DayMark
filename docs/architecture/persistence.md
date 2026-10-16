@@ -13,13 +13,13 @@
 
 ## 依赖方向是反过来的
 
-`persistence.js:13` 单向 `import { onDataWritten, buildSnapshot, applySnapshot } from './storage'`；`storage.js:9-12` 的注释写明了为什么不许反向 import：
+`persistence.js:13` 单向 `import { onDataWritten, buildSnapshot, applySnapshot } from './storage'`；`storage.js:13-17` 的注释写明了为什么不许反向 import：
 
 > 数据访问层不该决定传输时序，否则模块导入期的 `migrateIfNeeded` 会在启动回填完成前就把未回填的 localStorage 写回文件。
 
-`SCHEMA_VERSION = 2`（`storage.js:24`）在模块导入期就跑迁移，那时 localStorage 还是空的——如果 storage 自己触发落盘，就会写出一份「合法但为空」的快照，把本机真实数据整份盖掉。
+`SCHEMA_VERSION = 2`（`storage.js:29`）在模块导入期就跑迁移，那时 localStorage 还是空的——如果 storage 自己触发落盘，就会写出一份「合法但为空」的快照，把本机真实数据整份盖掉。
 
-订阅关系在模块加载期就挂好：`persistence.js:117` `onDataWritten(() => scheduleFlush())`。注册接口本身在 `storage.js:144`，某个监听器抛错不会中断其他监听器（`:164`）。
+订阅关系在模块加载期就挂好：`persistence.js:117` `onDataWritten(() => scheduleFlush())`。注册接口本身在 `storage.js:179`，某个监听器抛错不会中断其他监听器（`:195`）。
 
 ## 就绪闸门：`ready` 之前一律不写
 
@@ -45,7 +45,7 @@ sequenceDiagram
 
 - `persistence.js:44` `scheduleFlush()` 开头 `if (!isElectronRuntime() || !ready) return;` —— 回填完成前的所有写库**直接被丢弃**，这是防住「空快照盖掉本机文件」的唯一闸门。
 - `persistence.js:66-68`：`loadSnapshot()` 失败被 `.catch(() => null)` 吞掉后仍然照常置 `ready = true`。首次运行（无文件）与「读盘失败」在这里等价于「本机为空」，是有意为之：不能因为读盘抖动就永远不落盘。
-- `storage.js:973-979`：`applySnapshot()` **故意不通知订阅者**。注释给了两个场景——启动回填时文件已是权威数据；云端拉取时主进程已写好文件。再通知一次只会用新时间戳把刚下载的数据回写、引发多余推送。它要求 `snap.exportDate` 存在，否则返回 `false`（`:980`）。
+- `storage.js:1250-1264`：`applySnapshot()` **故意不通知订阅者**。注释给了两个场景——启动回填时文件已是权威数据；云端拉取时主进程已写好文件。再通知一次只会用新时间戳把刚下载的数据回写、引发多余推送。它要求 `snap.exportDate` 存在，否则返回 `false`（`:1251`）。
 
 ## 300ms 防抖与失败上报
 
@@ -83,9 +83,15 @@ renameSync(tmp, file)
 
 `main.js:29-45`：`DAYMARK_SMOKE` 会写一份空快照做 IPC 探针。若不隔离，跑一次探测就把本机真实数据文件清空；而「本地为空」在同步决策里是**被允许的状态**（`planPush` 见 [同步链路](sync.md)），一次上传就把云端也带空。所以冒烟模式把 `userData` 重定向到 `%TEMP%\daymark-smoke-<ts>\`，并在 `will-quit` 删除。探针本身还校验「原子写后能原样读回」（`main.js:407-409`）。
 
+## 归档为什么不需要新的落盘环节
+
+1.1.2 的归档功能**没有增加存储键**：打卡项与待办仍共用 `daily_checkin_items` / `daily_todos` 两个数组，归档只是往同一条记录上加 `archived` / `archivedAt` 两个字段。于是快照链路一行没改就自动带上了它——`buildSnapshot()`（`storage.js:1239-1242`）走 `getAllData()`（`:1139`）原样搬运数组，`applySnapshot()`（`:1250`）原样写回，主进程与 WebDAV 看到的只是一份变大了一点的 JSON。
+
+这也是**没有加 `SCHEMA_VERSION`** 的原因：老数据里没有这两个字段就等于「未归档」，读取时不需要归一化任何东西。真正需要盯的是三处白名单重建（详见[统计口径](stats.md)的「归档与界面可见性」一节）：`normalizeTodo()`（`:1072`）、`setAllData()`（`:1278`）的打卡项重建、以及 CSV 的列与解析。任何一处漏掉，归档状态就会在「导出 → 恢复」或「本机 → 另一台设备」的往返中被静默抹掉，归档项重新冒到界面上。回归由 `verify:persistence` 第 6.5 组、`verify:backup` 第 10 组锁住。
+
 ## 谁锁住了这些行为
 
-`.workbuddy/verify-persistence.mjs` 用桩替掉浏览器环境，断言：ready 之前不落盘、回填自身不触发落盘、防抖合并成一次、`beforeunload` 走同步通道、落盘失败被如实上报、云端快照应用后不产生回写、桥缺少同步通道时不误用。
+`.workbuddy/verify-persistence.mjs` 用桩替掉浏览器环境，断言：ready 之前不落盘、回填自身不触发落盘、防抖合并成一次、`beforeunload` 走同步通道、落盘失败被如实上报、云端快照应用后不产生回写、归档标记随快照双向流转且回填后界面与统计都正确、桥缺少同步通道时不误用。
 
 改这条链路任何一处，先跑：
 
@@ -96,4 +102,4 @@ npm run verify:persistence   # 再跑 npm run verify 全量
 ## 已知文档差异
 
 - `README.md` 的数据流图写作「localStorage ↔ daymark-snapshot.json（300ms 防抖 + 原子写）」，没有体现 `ready` 闸门。真正的风险不在防抖，而在回填完成前落盘——本节是准的。
-- `src/utils/storage.js:968-971` 的 `buildSnapshot()` 把 `updatedAt` 置为 `exportDate`（同一时刻），而 `getAllData()`（`:955-963`）自己也写 `exportDate`。二者恒等，因此[同步链路](sync.md)里 `resolveLatest` 的「`updatedAt` 缺失时回落 `exportDate`」在当前实现下永远命中前者；回落分支是为读入外部/历史文件准备的，不是死代码。
+- `src/utils/storage.js:1239-1242` 的 `buildSnapshot()` 把 `updatedAt` 置为 `exportDate`（同一时刻），而 `getAllData()`（`:1139-1148`）自己也写 `exportDate`。二者恒等，因此[同步链路](sync.md)里 `resolveLatest` 的「`updatedAt` 缺失时回落 `exportDate`」在当前实现下永远命中前者；回落分支是为读入外部/历史文件准备的，不是死代码。

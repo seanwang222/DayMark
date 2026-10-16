@@ -43,7 +43,8 @@ function BottomNav() {
       }}
       elevation={0}
     >
-      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', px: 2, pt: 0.75, pb: 1.5 }}>
+      {/* 上下各 9px：原来是 6/12，整条导航的可见高度不变，但四个入口会明显偏上 */}
+      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', px: 2, pt: 1.125, pb: 1.125 }}>
         {/* 左侧：导航项（日程 / 打卡 / 待办） */}
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           {NAV_ITEMS.map((item) => {

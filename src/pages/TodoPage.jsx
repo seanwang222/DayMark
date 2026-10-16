@@ -11,11 +11,12 @@ import AddTodoDialog from '../components/AddTodoDialog';
 import TodoCompleteDialog from '../components/TodoCompleteDialog';
 import ConfirmDialog from '../components/ConfirmDialog';
 import {
-  getTodos,
+  getActiveTodos,
   addTodo,
   editTodo,
   toggleTodo,
   deleteTodo,
+  archiveTodo,
   reorderTodos,
   toggleTodoPhase,
   TODO_PRIORITIES,
@@ -27,7 +28,7 @@ import {
  * 左右两侧联动高亮
  */
 function TodoPage() {
-  const [todos, setTodos] = useState(() => getTodos());
+  const [todos, setTodos] = useState(() => getActiveTodos());
   const [filter, setFilter] = useState('all');
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editTodoItem, setEditTodoItem] = useState(null);
@@ -42,7 +43,7 @@ function TodoPage() {
   const leftListRef = useRef(null);
 
   const refreshTodos = useCallback(() => {
-    setTodos([...getTodos()]);
+    setTodos([...getActiveTodos()]);
   }, []);
 
   useEffect(() => {
@@ -221,6 +222,12 @@ function TodoPage() {
       refreshTodos();
     }
     setDeleteId(null);
+  };
+
+  // 归档：待办连同 STAR 描述、行动清单与复盘一起退出界面，恢复入口在「数据管理 → 归档」
+  const handleArchive = (id) => {
+    archiveTodo(id);
+    refreshTodos();
   };
 
   // —— 拖拽排序 ——
@@ -465,6 +472,7 @@ function TodoPage() {
                         onRequestComplete={handleRequestComplete}
                         onCancelComplete={handleCancelComplete}
                         onEdit={handleOpenEdit}
+                        onArchive={handleArchive}
                         onDelete={handleDelete}
                         onEditRecord={handleEditRecord}
                         sidebarSelected={selectedTodoId === todo.id || selectedPriority === todo.priority}
@@ -488,6 +496,11 @@ function TodoPage() {
             <Typography variant="body2" sx={{ color: '#484f58' }}>
               点击下方按钮添加待办
             </Typography>
+            {filter === 'all' && (
+              <Typography variant="caption" sx={{ color: '#484f58', display: 'block', mt: 1 }}>
+                已归档的待办同样不在这里显示，可在「数据管理 → 归档」中查看与恢复
+              </Typography>
+            )}
           </Box>
         )}
 

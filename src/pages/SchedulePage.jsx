@@ -15,9 +15,9 @@ import EventIcon from '@mui/icons-material/Event';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import ConfirmDialog from '../components/ConfirmDialog';
 import {
-  getCheckinItems,
+  getActiveCheckinItems,
   getCheckinRecords,
-  getTodos,
+  getActiveTodos,
   getToday,
   getUpcomingPhases,
   getQuickNotes,
@@ -289,9 +289,9 @@ function SchedulePage() {
 
   const refresh = () => setVersion((v) => v + 1);
 
-  const items = useMemo(() => getCheckinItems(), [version]);
+  const items = useMemo(() => getActiveCheckinItems(), [version]);
   const records = useMemo(() => getCheckinRecords(), [version]);
-  const todos = useMemo(() => getTodos(), [version]);
+  const todos = useMemo(() => getActiveTodos(), [version]);
 
   // 计算某天的全部条目
   const getEntries = (dateStr) => {

@@ -20,6 +20,9 @@ const {
   addCheckinItem, toggleCheckin, addTodo, toggleTodo, toggleTodoPhase,
   getCheckinItems, getCheckinRecords, getTodos, getAllData,
   addQuickNote, toggleQuickNote, getAllQuickNotes,
+  archiveCheckinItem, unarchiveCheckinItem, archiveTodo, unarchiveTodo,
+  getActiveCheckinItems, getArchivedCheckinItems, getActiveTodos, getArchivedTodos,
+  getCheckinStats, getToday,
 } = storage;
 
 /* ---- 工具 ---- */
@@ -295,5 +298,100 @@ addQuickNote(D1, '不该残留的条目');
 backup.restoreData(legacyNoNotes, 'replace');
 assert.deepEqual(getAllQuickNotes(), {}, '恢复旧备份应整份替换，不留旧条目');
 console.log('OK: 临时任务在 CSV / JSON 往返无损，合并去重且兼容缺字段的旧备份');
+
+/* ---- 10. 归档：CSV / JSON 两条路径都必须带着归档状态往返，缺列的旧备份安全降级 ---- */
+localStorage.clear();
+addCheckinItem('常态项目');
+addCheckinItem('收尾项目');
+const [GA, GB] = getCheckinItems();
+toggleCheckin('2026-09-01', GB.id, true, { time: '07:00', note: '归档前留下的历史' });
+addTodo({
+  title: '归档待办',
+  description: { situation: '背景G', target: '目标G' },
+  priority: 'urgent_important',
+  phases: [{ name: '阶段一', completed: true, completedTime: '10:00' }],
+});
+addTodo({ title: '普通待办', description: {} });
+const archivedTodo = getTodos()[0];
+archiveCheckinItem(GB.id);
+archiveTodo(archivedTodo.id);
+// 把归档日期改成固定值，才好断言往返（archive* 本身只会写今天）
+const rawGItems = JSON.parse(localStorage.getItem('daily_checkin_items'));
+rawGItems.find((i) => i.id === GB.id).archivedAt = '2026-09-15';
+localStorage.setItem('daily_checkin_items', JSON.stringify(rawGItems));
+const rawGTodos = JSON.parse(localStorage.getItem('daily_todos'));
+rawGTodos.find((t) => t.id === archivedTodo.id).archivedAt = '2026-09-20';
+localStorage.setItem('daily_todos', JSON.stringify(rawGTodos));
+assert.deepEqual(getActiveCheckinItems().map((i) => i.name), ['常态项目'], '归档后界面只剩未归档项');
+assert.deepEqual(getActiveTodos().map((t) => t.title), ['普通待办'], '归档后待办列表只剩未归档项');
+
+const gCsv = backup.buildAllCSV();
+assert.ok(gCsv.includes('归档日期'), 'CSV 表头应含「归档日期」列');
+assert.ok(gCsv.includes('2026-09-15'), 'CSV 应带上打卡项的归档日期');
+assert.ok(gCsv.includes('2026-09-20'), 'CSV 应带上待办的归档日期');
+assert.ok(gCsv.includes('收尾项目'), '归档项的历史记录仍要出现在打卡记录区块里');
+
+const parsedG = backup.parseBackupCSV(gCsv);
+assert.equal(parsedG.items.find((i) => i.name === '收尾项目').archived, true, 'CSV 解析应还原归档标记');
+assert.equal(parsedG.items.find((i) => i.name === '收尾项目').archivedAt, '2026-09-15');
+assert.equal(parsedG.items.find((i) => i.name === '常态项目').archived, false, '未归档项应解析为未归档');
+
+localStorage.clear();
+backup.restoreData(parsedG, 'replace');
+assert.deepEqual(getActiveCheckinItems().map((i) => i.name), ['常态项目'], 'CSV 恢复后界面只该看见未归档项目');
+assert.deepEqual(getArchivedCheckinItems().map((i) => i.name), ['收尾项目'], 'CSV 恢复应带回归档项');
+assert.equal(getArchivedCheckinItems()[0].archivedAt, '2026-09-15', '归档日期要能往返');
+assert.deepEqual(getActiveTodos().map((t) => t.title), ['普通待办'], 'CSV 恢复后归档待办不应出现在界面');
+const csvTodo = getArchivedTodos()[0];
+assert.equal(csvTodo.archivedAt, '2026-09-20', '待办归档日期要能往返');
+assert.equal(csvTodo.description.situation, '背景G', '归档待办的 STAR 应原样回来');
+assert.equal(csvTodo.phases.length, 1, '归档待办的行动清单应原样回来');
+
+const gOv = backup.getDataOverview();
+assert.equal(gOv.itemCount, 1, '概览的打卡项目数应只数未归档的');
+assert.equal(gOv.archivedItemCount, 1);
+assert.equal(gOv.todoCount, 1, '概览的待办数应只数未归档的');
+assert.equal(gOv.archivedTodoCount, 1);
+assert.equal(gOv.recordCount, 1, '归档项的历史记录不应因归档而消失');
+assert.equal(gOv.archivedRecordCount, 1, '概览应算出多少条记录属于归档项');
+
+const inv = backup.getArchiveInventory();
+assert.equal(inv.items.length, 1);
+assert.equal(inv.items[0].recordCount, 1, '归档清单应给出历史条数');
+assert.equal(inv.items[0].lastRecordDate, '2026-09-01');
+assert.equal(inv.items[0].archivedAt, '2026-09-15');
+assert.equal(inv.todos[0].title, '归档待办');
+assert.equal(inv.todos[0].phaseTotal, 1);
+
+// JSON 无损往返
+const gJson = JSON.stringify(getAllData(), null, 2);
+assert.ok(JSON.parse(gJson).items.find((i) => i.name === '收尾项目').archived, '快照 JSON 必须带 archived');
+localStorage.clear();
+backup.restoreData(backup.parseBackupJSON(gJson), 'replace');
+assert.deepEqual(getArchivedCheckinItems().map((i) => i.name), ['收尾项目'], 'JSON 恢复应保留归档状态');
+assert.deepEqual(getArchivedTodos().map((t) => t.title), ['归档待办'], 'JSON 恢复应保留待办归档状态');
+assert.equal(getArchivedCheckinItems()[0].archivedAt, '2026-09-15', 'JSON 归档日期也应原样');
+
+// 恢复归档后界面重新看得见
+unarchiveCheckinItem(getArchivedCheckinItems()[0].id);
+unarchiveTodo(getArchivedTodos()[0].id);
+assert.equal(getActiveCheckinItems().length, 2, '取消归档后应回到界面');
+assert.equal(getActiveTodos().length, 2, '取消归档后待办应回到界面');
+assert.equal(getCheckinStats(getToday()).total, 2, '取消归档后当日分母应恢复');
+
+// 旧备份（没有归档列）应归一化成未归档，而不是报错或凭空多出归档项
+const legacyG = backup.parseBackupCSV([
+  '[打卡项目]', '项目名称,创建日期,排序', '旧项目,2026-08-01,0', '',
+  '[待办事项]',
+  '标题,背景,目标,行动,结果,阶段,优先级,状态,完成时间,创建时间,截止日期,保持,改进,停止,开始',
+  '旧待办,,,,,,not_urgent_important,未完成,,2026-08-01,,,,,', '',
+].join('\n'));
+localStorage.clear();
+backup.restoreData(legacyG, 'replace');
+assert.deepEqual(getActiveCheckinItems().map((i) => i.name), ['旧项目'], '缺归档列的旧备份应视为未归档');
+assert.deepEqual(getActiveTodos().map((t) => t.title), ['旧待办'], '缺归档列的旧备份待办应未归档');
+assert.equal(getArchivedCheckinItems().length, 0, '旧备份不该造出归档项');
+assert.equal(getArchivedTodos().length, 0);
+console.log('OK: 归档状态在 CSV / JSON 两条路径往返无损，缺列的旧备份安全降级为未归档');
 
 console.log('\n全部验证通过 ✅');

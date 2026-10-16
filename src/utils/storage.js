@@ -6,6 +6,9 @@
  * - 待办优先级：四象限 urgent_important / urgent_not_important / not_urgent_important / not_urgent_not_important
  * - 待办完成：{ completedTime, review: { keep, improve, stop, start } }
  * - 临时任务：按天存 { 'YYYY-MM-DD': [{ id, text, done, createdAt, doneAt }] }
+ * - 归档：打卡项与待办共用同一份数组，归档只是加 { archived: true, archivedAt: 'YYYY-MM-DD' } 两个字段。
+ *   不另开存储键，是为了让打卡记录始终挂在同一个 itemId 上——恢复归档即恢复全部历史，
+ *   统计也能按「在册区间」（创建日 → 归档日前一天）继续算旧账。
  *
  * 数据持久化：所有写操作统一走 safeWrite，末尾通知 onDataWritten 的订阅者，
  * 由 utils/persistence 决定「何时」落盘到本机文件（浏览器 / Node 测试环境无订阅者即 no-op）。
@@ -72,7 +75,7 @@ function daysBetween(a, b) {
  */
 export function getUpcomingPhases(withinDays = 7, todayStr = getToday()) {
   const out = [];
-  getTodos().forEach((todo) => {
+  getActiveTodos().forEach((todo) => {
     if (todo.completed) return;
     (todo.phases || []).forEach((phase) => {
       if (phase.completed || !phase.dueDate) return;
@@ -92,6 +95,36 @@ export function getUpcomingPhases(withinDays = 7, todayStr = getToday()) {
  */
 export function isPastDue(completed, dueDate, todayStr) {
   return !completed && !!dueDate && String(dueDate) < String(todayStr);
+}
+
+/**
+ * 是否已归档。只认真值，老数据里根本没有这个字段（undefined）即「未归档」，
+ * 因此新增归档不需要动 SCHEMA_VERSION。
+ */
+function isArchived(entry) {
+  return !!(entry && entry.archived);
+}
+
+/** 合法的归档日期字符串；非法值一律归零，避免脏数据把统计区间带歪 */
+function normalizeArchivedAt(v) {
+  const s = String(v == null ? '' : v).slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : '';
+}
+
+/**
+ * 打卡项在某一天是否「在册」——所有统计口径的唯一入口。
+ * 与「项目诞生前不算未完成」对称：归档日及之后也不算未完成，那天的任务已经交接掉了。
+ * 已归档但没有归档日期（外来的脏数据）按「全程不在册」处理，宁可少算也不凭空拉低完成率。
+ */
+export function isItemActiveOn(item, dateStr) {
+  if (!item) return false;
+  const created = item.createdAt ? String(item.createdAt).slice(0, 10) : '';
+  if (created && String(dateStr) < created) return false;
+  if (isArchived(item)) {
+    const ended = normalizeArchivedAt(item.archivedAt);
+    if (!ended || String(dateStr) >= ended) return false;
+  }
+  return true;
 }
 
 /**
@@ -269,6 +302,47 @@ export function getCheckinItems() {
   return safeRead(STORAGE_KEYS.CHECKIN_ITEMS, []);
 }
 
+/** 界面上可见的打卡项（未归档）：列表、今日分母、统计与筛选下拉都从这里取 */
+export function getActiveCheckinItems() {
+  return getCheckinItems().filter((item) => !isArchived(item));
+}
+
+/** 已归档的打卡项：最近归档的排前面，只在「数据管理 → 归档」里出现 */
+export function getArchivedCheckinItems() {
+  return getCheckinItems()
+    .filter(isArchived)
+    .sort(
+      (a, b) =>
+        String(b.archivedAt || '').localeCompare(String(a.archivedAt || '')) ||
+        (a.order || 0) - (b.order || 0),
+    );
+}
+
+/** 归档一个打卡项：归档日就是它「在册区间」的终点（当天起不再参与统计） */
+export function archiveCheckinItem(id) {
+  const items = getCheckinItems();
+  const idx = items.findIndex((item) => item.id === id);
+  if (idx !== -1) {
+    items[idx] = { ...items[idx], archived: true, archivedAt: getToday() };
+    safeWrite(STORAGE_KEYS.CHECKIN_ITEMS, items);
+  }
+  return items;
+}
+
+/** 取消归档：整体删掉两个字段，让恢复后的项目与从未归档过完全等价（历史记录一直还在） */
+export function unarchiveCheckinItem(id) {
+  const items = getCheckinItems();
+  const idx = items.findIndex((item) => item.id === id);
+  if (idx !== -1) {
+    const next = { ...items[idx] };
+    delete next.archived;
+    delete next.archivedAt;
+    items[idx] = next;
+    safeWrite(STORAGE_KEYS.CHECKIN_ITEMS, items);
+  }
+  return items;
+}
+
 export function addCheckinItem(name) {
   const items = getCheckinItems();
   const newItem = {
@@ -311,17 +385,27 @@ export function deleteCheckinItem(id) {
 
 /**
  * 重新排序打卡项目
+ *
+ * 界面只会把「当前可见」的 id 传进来（归档项、被筛掉的项都不在里面），
+ * 所以这里不能拿 reorderedIds 直接当成整份数组写回——那等于一次拖拽就把没点到的条目从存储里抹掉。
+ * 规则：先按传入顺序排，再把没被点到的按原顺序追加，最后统一重排 order。返回值是完整数组（含归档项）。
  * @param {Array<string>} reorderedIds 按新顺序排列的 ID 数组
  */
 export function reorderCheckinItems(reorderedIds) {
-  const items = getCheckinItems();
+  const all = getCheckinItems();
   const map = {};
-  items.forEach((item) => { map[item.id] = item; });
-  const reordered = reorderedIds
-    .filter((id) => map[id])
-    .map((id, idx) => { map[id].order = idx; return map[id]; });
-  safeWrite(STORAGE_KEYS.CHECKIN_ITEMS, reordered);
-  return reordered;
+  all.forEach((item) => { map[item.id] = item; });
+  const seen = {};
+  const ordered = [];
+  reorderedIds.forEach((id) => {
+    if (!map[id] || seen[id]) return;
+    seen[id] = true;
+    ordered.push(map[id]);
+  });
+  all.forEach((item) => { if (!seen[item.id]) ordered.push(item); });
+  ordered.forEach((item, idx) => { item.order = idx; });
+  safeWrite(STORAGE_KEYS.CHECKIN_ITEMS, ordered);
+  return ordered;
 }
 
 /* ==================== 打卡记录管理 ==================== */
@@ -365,8 +449,13 @@ export function toggleCheckin(date, itemId, completed, extra) {
   safeWrite(STORAGE_KEYS.CHECKIN_RECORDS, records);
 }
 
+/**
+ * 某日的「完成 x / 分母 y」。分母用 isItemActiveOn 逐日判定，而不是简单取当前可见项：
+ * 这一格在界面上可以翻到过去某天，那天在册的项目（含后来才被归档的）当年确实要打卡，
+ * 而那天还没创建或已归档的项目不该被算成未完成。
+ */
 export function getCheckinStats(date) {
-  const items = getCheckinItems();
+  const items = getCheckinItems().filter((i) => isItemActiveOn(i, date));
   const record = getCheckinRecordByDate(date);
   const total = items.length;
   let completed = 0;
@@ -418,10 +507,12 @@ export function getMonthlyData(year, month, itemId) {
       continue;
     }
 
-    // 分母只算「这一天已经存在的项目」，并且还没到来的日子不参与统计。
-    // 口径与 getOverallStats / getItemStats 对齐：项目诞生前与未来日子都不是「未完成」，
-    // 否则多项视图里晚建的项目会系统性拉低完成率（跨年视图更是把整个未来月份算成 0%）。
-    const active = list.filter((i) => !i.createdAt || i.createdAt.slice(0, 10) <= dateStr);
+    // 分母只算「这一天在册的项目」，并且还没到来的日子不参与统计。
+    // 在册 = 已创建 且 未归档（isItemActiveOn：创建日 ≤ 当天 < 归档日），
+    // 口径与 getCheckinStats / getOverallStats / getItemStats 完全对齐：
+    // 项目诞生前、归档日及以后与未来日子都不是「未完成」，否则晚建的项目会系统性拉低完成率
+    // （跨年视图更是把整个未来月份算成 0%），归档掉的项目会把往年月份的数字追溯改写。
+    const active = list.filter((i) => isItemActiveOn(i, dateStr));
     const total = active.length;
     if (total === 0 || dateStr > today) {
       data.push({ date: dateStr, completed: 0, total: 0, rate: 0, excluded: true });
@@ -511,38 +602,78 @@ export function getYearlyData(year, itemId) {
   };
 }
 
-/* ==================== 单项目汇总统计 ==================== */
+/* ==================== 汇总统计（按区间） ==================== */
+
+const pad2 = (n) => String(n).padStart(2, '0');
+
+/** 某年某月（1-12）的最后一天 */
+function lastDayOfMonth(year, month) {
+  return new Date(year, month, 0).getDate();
+}
 
 /**
- * 单个打卡项目的汇总统计（统计区间：项目创建日 → 今天）
- *
- * 与按月的 getMonthlyData 不同，这里统计的是该项目的全生命周期：
- * 完成天数、完成率、当前连续打卡天数、历史最长连续天数。
- *
- * @param {string} itemId
- * @returns {null|{itemId:string, name:string, createdAt:string, totalDays:number,
- *   doneDays:number, missedDays:number, rate:number, currentStreak:number,
- *   longestStreak:number, firstDone:string, lastDone:string}}
+ * 月度 / 季度 / 年度视图对应的统计区间（首尾都含，YYYY-MM-DD）。
+ * 这里只回答「看哪一段」，是否超出今天由 statsFromRange 裁剪。
+ * @param {'monthly'|'quarterly'|'yearly'} view
  */
-export function getItemStats(itemId) {
-  const items = getCheckinItems();
-  const records = getCheckinRecords();
-  const target = items.find((i) => i.id === itemId);
-  if (!target) return null;
+export function getViewRange(view, year, month, quarter) {
+  if (view === 'yearly') {
+    return { start: `${year}-01-01`, end: `${year}-12-31` };
+  }
+  if (view === 'quarterly') {
+    const first = (quarter - 1) * 3 + 1;
+    return {
+      start: `${year}-${pad2(first)}-01`,
+      end: `${year}-${pad2(first + 2)}-${pad2(lastDayOfMonth(year, first + 2))}`,
+    };
+  }
+  return {
+    start: `${year}-${pad2(month)}-01`,
+    end: `${year}-${pad2(month)}-${pad2(lastDayOfMonth(year, month))}`,
+  };
+}
 
+/**
+ * 逐日走一遍统计区间，产出「完成天数 / 完成率 / 当前连续 / 最长连续」。
+ *
+ * 全应用唯一的汇总统计实现：单项目与全部项目、月度/季度/年度都经由这里，
+ * 界面只负责显示——避免出现「月历一套口径、汇总一套口径」那种错得很安静的分裂。
+ *
+ * classify(dateStr) → 'done' | 'miss' | 'skip'。skip 的那天整天不参与：
+ * 既不进分母，也不把连续段打断（项目还没创建、已经归档、日子还没到来都属于 skip）。
+ * 结束日一律裁剪到今天，未来的日子不配拉低完成率。
+ */
+function statsFromRange(startStr, endStr, classify, meta) {
   const today = getToday();
-  const allDates = Object.keys(records).sort();
+  let start = startStr || today;
+  const end = endStr && endStr <= today ? endStr : today;
 
-  // 统计起点：项目创建日；缺失时回退到最早有记录的日期
-  let start = target.createdAt || (allDates.length > 0 ? allDates[0] : today);
-  if (start > today) start = today;
+  // 区间整体落在未来（或起点晚于终点）：没有任何可统计的日子
+  if (start > end) {
+    return {
+      ...meta,
+      empty: true,
+      rangeStart: '',
+      rangeEnd: '',
+      totalDays: 0,
+      doneDays: 0,
+      missedDays: 0,
+      rate: 0,
+      currentStreak: 0,
+      longestStreak: 0,
+      firstDone: '',
+      lastDone: '',
+    };
+  }
 
   // 安全上限：异常数据下最多回溯 10 年，避免超长循环
   const MAX_DAYS = 3660;
-  const cursor = new Date(`${start}T00:00:00`);
-  const end = new Date(`${today}T00:00:00`);
-  const earliest = new Date(end.getTime() - MAX_DAYS * 24 * 60 * 60 * 1000);
-  if (cursor < earliest) cursor.setTime(earliest.getTime());
+  const endDay = new Date(`${end}T00:00:00`);
+  const floor = new Date(endDay.getTime());
+  floor.setDate(floor.getDate() - MAX_DAYS);
+  let cursor = new Date(`${start}T00:00:00`);
+  if (Number.isNaN(cursor.getTime()) || cursor < floor) cursor = floor;
+  start = formatDate(cursor);
 
   let totalDays = 0;
   let doneDays = 0;
@@ -550,42 +681,42 @@ export function getItemStats(itemId) {
   let longest = 0;
   let streakEnd = '';
   // streakEnd 那一段连续的长度。必须与 streakEnd 同步保存：
-  // 若今天尚未打卡，循环结束时 running 已被重置为 0，但连续段其实结束于昨天
+  // 若区间末当天尚未打卡，循环结束时 running 已被重置为 0，但连续段其实结束于前一天
   let streakEndRun = 0;
   let firstDone = '';
   let lastDone = '';
 
-  while (cursor <= end) {
+  while (cursor <= endDay) {
     const dateStr = formatDate(cursor);
-    const r = records[dateStr] && records[dateStr][itemId];
-    const done = !!(r && (r === true || (typeof r === 'object' && r.completed)));
-
-    totalDays += 1;
-    if (done) {
-      doneDays += 1;
-      running += 1;
-      if (running > longest) longest = running;
-      streakEnd = dateStr;
-      streakEndRun = running;
-      if (!firstDone) firstDone = dateStr;
-      lastDone = dateStr;
-    } else {
-      running = 0;
+    const kind = classify(dateStr);
+    if (kind !== 'skip') {
+      totalDays += 1;
+      if (kind === 'done') {
+        doneDays += 1;
+        running += 1;
+        if (running > longest) longest = running;
+        streakEnd = dateStr;
+        streakEndRun = running;
+        if (!firstDone) firstDone = dateStr;
+        lastDone = dateStr;
+      } else {
+        running = 0;
+      }
     }
     cursor.setDate(cursor.getDate() + 1);
   }
 
-  // 当前连续：连续段需结束于今天或昨天（今天还没打卡不算中断）
-  const yesterday = new Date();
-  yesterday.setDate(yesterday.getDate() - 1);
-  const yesterdayStr = formatDate(yesterday);
+  // 当前连续：连续段需结束于区间末，或区间末的前一天（当天还没打卡不算中断）
+  const prevDay = new Date(endDay);
+  prevDay.setDate(prevDay.getDate() - 1);
   const currentStreak =
-    streakEnd === today || streakEnd === yesterdayStr ? streakEndRun : 0;
+    streakEnd === end || streakEnd === formatDate(prevDay) ? streakEndRun : 0;
 
   return {
-    itemId,
-    name: target.name,
-    createdAt: target.createdAt || '',
+    ...meta,
+    empty: totalDays === 0,
+    rangeStart: start,
+    rangeEnd: end,
     totalDays,
     doneDays,
     missedDays: totalDays - doneDays,
@@ -597,19 +728,59 @@ export function getItemStats(itemId) {
   };
 }
 
+/** 打卡记录值是否表示已完成（兼容历史遗留的 boolean 形态） */
+function isRecordDone(v) {
+  return !!(v && (v === true || (typeof v === 'object' && v.completed)));
+}
+
+/**
+ * 单个打卡项目的汇总统计
+ *
+ * @param {string} itemId
+ * @param {{start?:string, end?:string}} [range] 统计区间（月度 / 季度 / 年度视图传入）。
+ *   不传即全生命周期（创建日 → 今天）。区间会与项目的「在册区间」求交：
+ *   创建日之前、归档日及以后都不参与，因此切换视图不会追溯改写历史月份的数字。
+ * @returns {null|{itemId:string, name:string, createdAt:string, empty:boolean,
+ *   rangeStart:string, rangeEnd:string, totalDays:number, doneDays:number, missedDays:number,
+ *   rate:number, currentStreak:number, longestStreak:number, firstDone:string, lastDone:string}}
+ */
+export function getItemStats(itemId, range) {
+  const items = getCheckinItems();
+  const records = getCheckinRecords();
+  const target = items.find((i) => i.id === itemId);
+  if (!target) return null;
+
+  const created = target.createdAt ? String(target.createdAt).slice(0, 10) : '';
+  const allDates = Object.keys(records).sort();
+  const lifeStart = created || (allDates.length > 0 ? allDates[0] : getToday());
+  const start = range && range.start && range.start > lifeStart ? range.start : lifeStart;
+  const end = range && range.end ? range.end : getToday();
+
+  return statsFromRange(
+    start,
+    end,
+    (dateStr) => {
+      if (!isItemActiveOn(target, dateStr)) return 'skip';
+      return isRecordDone(records[dateStr] && records[dateStr][itemId]) ? 'done' : 'miss';
+    },
+    { itemId, name: target.name, createdAt: target.createdAt || '' },
+  );
+}
+
 /**
  * 全部项目的聚合统计（与单项目 getItemStats 同构，天级「全勤日」口径）
  *
- * 统计区间：最早项目的创建日 → 今天。每一天按「当日所有已创建项目是否全部打卡完成」
- * 判定为完成日（全勤日）或未完成日。因此：
+ * 每一天按「当日在册（已创建且未归档）的项目是否全部打卡完成」判定为完成日（全勤日）或未完成日。
+ * 某天没有任何在册项目时整天不参与，也不打断连续段。因此：
  * - 完成天数 = 全勤天数；完成率 = 全勤率
- * - 当前连续 / 最长连续 = 连续全勤天数（结束于今天或昨天都不算中断）
+ * - 当前连续 / 最长连续 = 连续全勤天数（结束于区间末或其前一天都不算中断）
  *
- * @returns {null|{itemId:null, name:'全部项目', createdAt:string, totalDays:number,
- *   doneDays:number, missedDays:number, rate:number, currentStreak:number,
- *   longestStreak:number, firstDone:string, lastDone:string}}
+ * @param {{start?:string, end?:string}} [range] 同 getItemStats，不传即全生命周期
+ * @returns {null|{itemId:null, name:'全部项目', createdAt:string, empty:boolean,
+ *   rangeStart:string, rangeEnd:string, totalDays:number, doneDays:number, missedDays:number,
+ *   rate:number, currentStreak:number, longestStreak:number, firstDone:string, lastDone:string}}
  */
-export function getOverallStats() {
+export function getOverallStats(range) {
   const items = getCheckinItems();
   const records = getCheckinRecords();
   if (items.length === 0) return null;
@@ -618,76 +789,29 @@ export function getOverallStats() {
   const allDates = Object.keys(records).sort();
 
   // 统计起点：最早项目的创建日；缺失时回退到最早有记录的日期
-  let start = items.reduce(
-    (m, i) => (i.createdAt && i.createdAt.slice(0, 10) < m ? i.createdAt.slice(0, 10) : m),
+  const earliestCreated = items.reduce(
+    (m, i) => (i.createdAt && String(i.createdAt).slice(0, 10) < m
+      ? String(i.createdAt).slice(0, 10)
+      : m),
     allDates[0] || today,
   );
-  if (!start || start > today) start = today;
+  const start = range && range.start && range.start > earliestCreated
+    ? range.start
+    : earliestCreated || today;
+  const end = range && range.end ? range.end : today;
 
-  // 统计终点：今天；安全上限 10 年
-  const MAX_DAYS = 3660;
-  const cursor = new Date(`${start}T00:00:00`);
-  const end = new Date(`${today}T00:00:00`);
-  const earliest = new Date(end.getTime() - MAX_DAYS * 24 * 60 * 60 * 1000);
-  if (cursor < earliest) cursor.setTime(earliest.getTime());
-
-  const isDoneDay = (dateStr) => {
-    const active = items.filter((i) => !i.createdAt || i.createdAt.slice(0, 10) <= dateStr);
-    if (active.length === 0) return false;
-    const day = records[dateStr] || {};
-    const doneCnt = active.reduce((n, i) => {
-      const r = day[i.id];
-      return n + (r && (r === true || (typeof r === 'object' && r.completed)) ? 1 : 0);
-    }, 0);
-    return doneCnt === active.length;
-  };
-
-  let totalDays = 0;
-  let doneDays = 0;
-  let running = 0;
-  let longest = 0;
-  let streakEnd = '';
-  let streakEndRun = 0;
-  let firstDone = '';
-  let lastDone = '';
-
-  while (cursor <= end) {
-    const dateStr = formatDate(cursor);
-    totalDays += 1;
-    if (isDoneDay(dateStr)) {
-      doneDays += 1;
-      running += 1;
-      if (running > longest) longest = running;
-      streakEnd = dateStr;
-      streakEndRun = running;
-      if (!firstDone) firstDone = dateStr;
-      lastDone = dateStr;
-    } else {
-      running = 0;
-    }
-    cursor.setDate(cursor.getDate() + 1);
-  }
-
-  // 当前连续：连续段结束于今天或昨天都算（今天还没打卡不算中断）
-  const yesterday = new Date();
-  yesterday.setDate(yesterday.getDate() - 1);
-  const yesterdayStr = formatDate(yesterday);
-  const currentStreak =
-    streakEnd === today || streakEnd === yesterdayStr ? streakEndRun : 0;
-
-  return {
-    itemId: null,
-    name: '全部项目',
-    createdAt: start,
-    totalDays,
-    doneDays,
-    missedDays: totalDays - doneDays,
-    rate: totalDays > 0 ? Math.round((doneDays / totalDays) * 100) : 0,
-    currentStreak,
-    longestStreak: longest,
-    firstDone,
-    lastDone,
-  };
+  return statsFromRange(
+    start,
+    end,
+    (dateStr) => {
+      const active = items.filter((i) => isItemActiveOn(i, dateStr));
+      if (active.length === 0) return 'skip';
+      const day = records[dateStr] || {};
+      const doneCnt = active.reduce((n, i) => n + (isRecordDone(day[i.id]) ? 1 : 0), 0);
+      return doneCnt === active.length ? 'done' : 'miss';
+    },
+    { itemId: null, name: '全部项目', createdAt: earliestCreated || '' },
+  );
 }
 
 /* ==================== 待办事项管理 ==================== */
@@ -734,6 +858,47 @@ export function getTodos() {
     if (b.order !== undefined) return 1;
     return new Date(b.createdAt) - new Date(a.createdAt);
   });
+}
+
+/** 界面上可见的待办（未归档）：列表、四象限、计数与提醒都从这里取 */
+export function getActiveTodos() {
+  return getTodos().filter((t) => !isArchived(t));
+}
+
+/** 已归档的待办：最近归档的排前面，只在「数据管理 → 归档」里出现 */
+export function getArchivedTodos() {
+  return getTodos()
+    .filter(isArchived)
+    .sort(
+      (a, b) =>
+        String(b.archivedAt || '').localeCompare(String(a.archivedAt || '')) ||
+        (a.order || 0) - (b.order || 0),
+    );
+}
+
+/** 归档一条待办： STAR 描述、行动清单与复盘全部原样保留，只是不再出现在界面上 */
+export function archiveTodo(id) {
+  const todos = getTodos();
+  const idx = todos.findIndex((t) => t.id === id);
+  if (idx !== -1) {
+    todos[idx] = { ...todos[idx], archived: true, archivedAt: getToday() };
+    safeWrite(STORAGE_KEYS.TODOS, todos);
+  }
+  return todos;
+}
+
+/** 取消归档：整体删掉归档字段，恢复后与从未归档过完全等价 */
+export function unarchiveTodo(id) {
+  const todos = getTodos();
+  const idx = todos.findIndex((t) => t.id === id);
+  if (idx !== -1) {
+    const next = { ...todos[idx] };
+    delete next.archived;
+    delete next.archivedAt;
+    todos[idx] = next;
+    safeWrite(STORAGE_KEYS.TODOS, todos);
+  }
+  return todos;
 }
 
 export function addTodo(todoData) {
@@ -841,17 +1006,27 @@ export function deleteTodo(id) {
 
 /**
  * 重新排序待办事项
+ *
+ * 与 reorderCheckinItems 同一条护栏：界面传入的只是「当前可见」的 id（归档项不在其中），
+ * 直接把这份 id 列表当成整组待办写回，一次拖拽就会把没点到的条目从存储里抹掉。
+ * 返回值是完整数组（含归档项）。
  * @param {Array<string>} reorderedIds 按新顺序排列的 ID 数组
  */
 export function reorderTodos(reorderedIds) {
-  const todos = getTodos();
+  const all = getTodos();
   const map = {};
-  todos.forEach((t) => { map[t.id] = t; });
-  const reordered = reorderedIds
-    .filter((id) => map[id])
-    .map((id, idx) => { map[id].order = idx; return map[id]; });
-  safeWrite(STORAGE_KEYS.TODOS, reordered);
-  return reordered;
+  all.forEach((t) => { map[t.id] = t; });
+  const seen = {};
+  const ordered = [];
+  reorderedIds.forEach((id) => {
+    if (!map[id] || seen[id]) return;
+    seen[id] = true;
+    ordered.push(map[id]);
+  });
+  all.forEach((t) => { if (!seen[t.id]) ordered.push(t); });
+  ordered.forEach((t, idx) => { t.order = idx; });
+  safeWrite(STORAGE_KEYS.TODOS, ordered);
+  return ordered;
 }
 
 export { generateId, getToday, formatDate, getCurrentMonth, getNowTime };
@@ -948,6 +1123,13 @@ function normalizeTodo(t) {
     order: typeof t.order === 'number' ? t.order : undefined,
   };
   if (phases) normalized.phases = phases;
+  // 归档状态必须一起归一化：白名单重建对象的后果是「没列出的字段会被静默丢弃」，
+  // 少这一句就从备份里恢复的归档项会变成未归档，直接冒出来污染界面。
+  const archivedAt = normalizeArchivedAt(t.archivedAt);
+  if (t.archived === true || archivedAt) {
+    normalized.archived = true;
+    normalized.archivedAt = archivedAt;
+  }
   return normalized;
 }
 
@@ -1127,12 +1309,19 @@ export function setAllData(data, mode = 'merge') {
     }
     let id = src.id || generateId();
     if (items.some((i) => i.id === id)) id = generateId();
-    items.push({
+    const srcArchivedAt = normalizeArchivedAt(src && src.archivedAt);
+    const nextItem = {
       id,
       name,
       createdAt: src.createdAt || getToday(),
       order: items.length,
-    });
+    };
+    // 归档标记要跟着备份走：漏掉的话「导出 → 恢复」会把已归档的项目放回界面
+    if (src.archived === true || srcArchivedAt) {
+      nextItem.archived = true;
+      nextItem.archivedAt = srcArchivedAt;
+    }
+    items.push(nextItem);
     nameToId[name] = id;
     stats.items.added++;
   });
