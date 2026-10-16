@@ -634,3 +634,37 @@ export function getArchiveInventory() {
 
   return { items, todos };
 }
+
+/**
+ * 归档清单按「归档月份」分组，供数据管理的归档子界面逐月展示。
+ * 纯函数，只读 archive 的产出：归档日期非法或缺失（外来脏数据）的条目统一归到末尾的「未记录」，
+ * 保证分组前后条数相等，不会因为一个脏日期把数据整条丢掉。
+ * @param {{items:Array, todos:Array}} archive getArchiveInventory() 的输出
+ * @returns {Array<{month:string, label:string, entries:Array}>} 月份倒序，「未记录」在最后
+ */
+export function groupArchiveByMonth(archive) {
+  const buckets = new Map();
+  const push = (entry, kind) => {
+    const s = String(entry.archivedAt || '');
+    const month = /^\d{4}-\d{2}-\d{2}$/.test(s) ? s.slice(0, 7) : '';
+    if (!buckets.has(month)) buckets.set(month, []);
+    buckets.get(month).push({ ...entry, kind });
+  };
+  (archive.items || []).forEach((it) => push(it, 'item'));
+  (archive.todos || []).forEach((td) => push(td, 'todo'));
+
+  const emptyLastDesc = (a, b) => {
+    if (a === b) return 0;
+    if (!a) return 1;
+    if (!b) return -1;
+    return b.localeCompare(a);
+  };
+
+  return Array.from(buckets.entries())
+    .sort((a, b) => emptyLastDesc(a[0], b[0]))
+    .map(([month, entries]) => ({
+      month,
+      label: month ? `${Number(month.slice(0, 4))}年${Number(month.slice(5, 7))}月` : '未记录归档日期',
+      entries: entries.sort((x, y) => emptyLastDesc(x.archivedAt, y.archivedAt)),
+    }));
+}

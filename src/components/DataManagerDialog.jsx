@@ -13,6 +13,7 @@ import {
   ToggleButton,
   ToggleButtonGroup,
   LinearProgress,
+  Collapse,
 } from '@mui/material';
 import DownloadIcon from '@mui/icons-material/Download';
 import UploadIcon from '@mui/icons-material/Upload';
@@ -20,6 +21,10 @@ import SettingsBackupRestoreIcon from '@mui/icons-material/SettingsBackupRestore
 import ArchiveIcon from '@mui/icons-material/Archive';
 import UnarchiveIcon from '@mui/icons-material/Unarchive';
 import DeleteIcon from '@mui/icons-material/Delete';
+import ArrowBackIcon from '@mui/icons-material/ArrowBack';
+import ChevronRightIcon from '@mui/icons-material/ChevronRight';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import {
   exportAllCSV,
   exportBackupJSON,
@@ -27,6 +32,7 @@ import {
   restoreData,
   getDataOverview,
   getArchiveInventory,
+  groupArchiveByMonth,
 } from '../utils/backup';
 import {
   unarchiveCheckinItem,
@@ -52,7 +58,7 @@ const BLUE = '#1f6feb';
 const GREEN = '#3fb950';
 const RED = '#f85149';
 
-function ArchiveRow({ primary, meta, onRestore, onDelete }) {
+function ArchiveRow({ badge, primary, meta, onRestore, onDelete }) {
   return (
     <Box
       sx={{
@@ -65,12 +71,30 @@ function ArchiveRow({ primary, meta, onRestore, onDelete }) {
       }}
     >
       <Box sx={{ flex: 1, minWidth: 0 }}>
-        <Typography
-          variant="body2"
-          sx={{ color: TEXT, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-        >
-          {primary}
-        </Typography>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.7, minWidth: 0 }}>
+          {badge && (
+            <Typography
+              variant="caption"
+              sx={{
+                color: MUTED,
+                border: `1px solid ${BORDER}`,
+                borderRadius: '6px',
+                px: 0.5,
+                py: 0.1,
+                fontWeight: 700,
+                flexShrink: 0,
+              }}
+            >
+              {badge}
+            </Typography>
+          )}
+          <Typography
+            variant="body2"
+            sx={{ color: TEXT, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+          >
+            {primary}
+          </Typography>
+        </Box>
         <Typography variant="caption" sx={{ color: FAINT, display: 'block', mt: 0.2 }}>
           {meta}
         </Typography>
@@ -85,6 +109,75 @@ function ArchiveRow({ primary, meta, onRestore, onDelete }) {
           <DeleteIcon fontSize="small" />
         </IconButton>
       </Tooltip>
+    </Box>
+  );
+}
+
+/** 归档行右侧的说明文字：打卡项看历史条数，待办看完成状态与行动清单进度 */
+function archiveMeta(entry) {
+  return entry.kind === 'item'
+    ? `归档于 ${entry.archivedAt || '—'} · 历史打卡 ${entry.recordCount} 条${entry.lastRecordDate ? `（最近 ${entry.lastRecordDate}）` : ''} · 创建于 ${String(entry.createdAt || '—').slice(0, 10)}`
+    : [
+      `归档于 ${entry.archivedAt || '—'}`,
+      entry.completed ? '已完成' : '未完成',
+      entry.phaseTotal ? `行动 ${entry.phaseDone}/${entry.phaseTotal}` : '',
+      entry.dueDate ? `截止 ${entry.dueDate}` : '',
+      `创建于 ${String(entry.createdAt || '—').slice(0, 10)}`,
+    ].filter(Boolean).join(' · ');
+}
+
+/**
+ * 归档子界面里的一个月分节：整月默认折起，只看得到月份和条数，
+ * 这样归档再多也不会把子界面拉成一长串。
+ */
+function ArchiveMonthSection({ month, expanded, onToggle, onRestore, onDelete }) {
+  return (
+    <Box
+      sx={{
+        bgcolor: '#0d1117',
+        border: `1px solid ${BORDER}`,
+        borderRadius: '16px',
+        overflow: 'hidden',
+      }}
+    >
+      <Box
+        onClick={onToggle}
+        sx={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 1,
+          px: 1.5,
+          py: 1.1,
+          cursor: 'pointer',
+          userSelect: 'none',
+          '&:hover': { bgcolor: 'rgba(177,186,196,0.06)' },
+        }}
+      >
+        <Typography sx={{ color: TEXT, fontWeight: 700, fontSize: '0.86rem' }}>
+          {month.label}
+        </Typography>
+        <Typography variant="caption" sx={{ color: FAINT }}>
+          {month.entries.length} 条
+        </Typography>
+        <Box sx={{ flex: 1 }} />
+        {expanded
+          ? <ExpandLessIcon fontSize="small" sx={{ color: MUTED }} />
+          : <ExpandMoreIcon fontSize="small" sx={{ color: MUTED }} />}
+      </Box>
+      <Collapse in={expanded}>
+        <Box sx={{ px: 1.5, pb: 0.5, borderTop: `1px solid ${BORDER}` }}>
+          {month.entries.map((entry) => (
+            <ArchiveRow
+              key={`${entry.kind}-${entry.id}`}
+              badge={entry.kind === 'item' ? '打卡' : '待办'}
+              primary={entry.kind === 'item' ? entry.name : entry.title}
+              meta={archiveMeta(entry)}
+              onRestore={() => onRestore(entry)}
+              onDelete={() => onDelete(entry)}
+            />
+          ))}
+        </Box>
+      </Collapse>
     </Box>
   );
 }
@@ -162,6 +255,9 @@ function DataManagerDialog({ open, onClose }) {
   // 归档区里的恢复 / 彻底删除：改动已经写进 localStorage，但背后的页面要刷新才看得见
   const [dataTouched, setDataTouched] = useState(false);
   const [pendingDelete, setPendingDelete] = useState(null);
+  // 归档条目可能很多，一律收在「数据管理 → 归档」这个子界面里按月展开，不铺在主界面下方
+  const [archiveView, setArchiveView] = useState(false);
+  const [expandedMonths, setExpandedMonths] = useState({});
 
   // 每次打开重新读取概览并清空临时状态
   useEffect(() => {
@@ -176,6 +272,8 @@ function DataManagerDialog({ open, onClose }) {
       setBusy(false);
       setDataTouched(false);
       setPendingDelete(null);
+      setArchiveView(false);
+      setExpandedMonths({});
     }
   }, [open]);
 
@@ -292,6 +390,17 @@ function DataManagerDialog({ open, onClose }) {
     : '暂无记录';
 
   const archiveTotal = archive.items.length + archive.todos.length;
+  const archiveMonths = groupArchiveByMonth(archive);
+
+  const openArchiveView = () => {
+    setArchiveView(true);
+    // 进去只看最近一个月，其余折起，避免子界面一长串
+    if (archiveMonths.length) setExpandedMonths({ [archiveMonths[0].month]: true });
+  };
+
+  const toggleMonth = (month) => {
+    setExpandedMonths((prev) => ({ ...prev, [month]: !prev[month] }));
+  };
 
   return (
     <Dialog
@@ -309,283 +418,331 @@ function DataManagerDialog({ open, onClose }) {
       }}
     >
       <DialogTitle sx={{ color: TEXT, display: 'flex', alignItems: 'center', gap: 1 }}>
-        <SettingsBackupRestoreIcon fontSize="small" sx={{ color: MUTED }} />
-        数据管理
+        {archiveView ? (
+          <>
+            <IconButton
+              size="small"
+              onClick={() => setArchiveView(false)}
+              sx={{ color: MUTED, ml: -0.5 }}
+            >
+              <ArrowBackIcon fontSize="small" />
+            </IconButton>
+            <ArchiveIcon fontSize="small" sx={{ color: MUTED }} />
+            归档
+          </>
+        ) : (
+          <>
+            <SettingsBackupRestoreIcon fontSize="small" sx={{ color: MUTED }} />
+            数据管理
+          </>
+        )}
       </DialogTitle>
 
       <DialogContent dividers sx={{ borderColor: BORDER }}>
-        {/* ===== 概览 ===== */}
-        <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap' }}>
-          <StatCard
-            label="打卡项目"
-            value={overview.itemCount}
-            sub={overview.archivedItemCount ? `项 · 归档 ${overview.archivedItemCount}` : '项'}
-          />
-          <StatCard
-            label="打卡记录"
-            value={overview.recordCount}
-            sub={`覆盖 ${overview.dayCount} 天`}
-          />
-          <StatCard
-            label="待办事项"
-            value={overview.todoCount}
-            sub={
-              overview.archivedTodoCount
-                ? `已完成 ${overview.todoDone} · 归档 ${overview.archivedTodoCount}`
-                : `已完成 ${overview.todoDone} 条`
-            }
-          />
-          <StatCard
-            label="临时任务"
-            value={overview.noteCount}
-            sub={`已完成 ${overview.noteDone} 条`}
-          />
-        </Box>
-        <Typography variant="caption" sx={{ color: FAINT, display: 'block', mt: 1 }}>
-          记录日期范围：{dayRange}
-          {overview.archivedRecordCount
-            ? ` · 其中 ${overview.archivedRecordCount} 条属于已归档的打卡项`
-            : ''}
-        </Typography>
-
-        <Divider sx={{ my: 2, borderColor: BORDER }} />
-
-        {/* ===== 导出 ===== */}
-        <Typography sx={{ color: TEXT, fontWeight: 600, mb: 0.5, fontSize: '0.9rem' }}>
-          导出
-        </Typography>
-        <Typography variant="caption" sx={{ color: FAINT, display: 'block', mb: 1.5 }}>
-          CSV 为单文件，含打卡项目、打卡记录、待办事项、临时任务四个区块，已归档的数据同样在内
-          （靠「归档日期」列标记），可直接用 Excel 打开；
-          JSON 为无损备份，换设备或跨浏览器迁移请用 JSON。
-        </Typography>
-        <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1.5 }}>
-          <Button
-            variant="contained"
-            size="small"
-            startIcon={<DownloadIcon />}
-            onClick={exportAllCSV}
-            sx={{ bgcolor: BLUE, '&:hover': { bgcolor: '#388bfd' }, fontWeight: 600 }}
-          >
-            导出全量 CSV
-          </Button>
-          <Button
-            variant="outlined"
-            size="small"
-            startIcon={<DownloadIcon />}
-            onClick={exportBackupJSON}
-            sx={{
-              color: TEXT,
-              borderColor: BORDER,
-              '&:hover': { borderColor: '#8b949e', bgcolor: 'rgba(177,186,196,0.08)' },
-              fontWeight: 600,
-            }}
-          >
-            导出备份 JSON
-          </Button>
-        </Box>
-
-        <Divider sx={{ my: 2, borderColor: BORDER }} />
-
-        {/* ===== 恢复 ===== */}
-        <Typography sx={{ color: TEXT, fontWeight: 600, mb: 0.5, fontSize: '0.9rem' }}>
-          恢复
-        </Typography>
-        <Typography variant="caption" sx={{ color: FAINT, display: 'block', mb: 1.5 }}>
-          支持本应用导出的 CSV 与 JSON 文件。合并只补充本地缺失的数据，不会删除现有内容。
-        </Typography>
-
-        <ToggleButtonGroup
-          value={mode}
-          exclusive
-          onChange={(_e, v) => v && setMode(v)}
-          size="small"
-          sx={{
-            mb: 1.5,
-            display: 'flex',
-            '& .MuiToggleButtonGroup-grouped': {
-              flex: 1,
-              borderRadius: '16px !important',
-              border: '1px solid !important',
-              borderColor: `${BORDER} !important`,
-              ml: '0 !important',
-              bgcolor: 'transparent',
-            },
-            '& .MuiToggleButtonGroup-grouped + .MuiToggleButtonGroup-grouped': {
-              ml: '8px !important',
-            },
-            '& .MuiToggleButton-root': {
-              color: TEXT,
-              fontWeight: 600,
-              px: 1.5,
-              py: 0.8,
-              '&.Mui-selected': {
-                bgcolor: `${BLUE} !important`,
-                borderColor: `${BLUE} !important`,
-                color: '#ffffff',
-                '&:hover': {
-                  bgcolor: '#388bfd !important',
-                  borderColor: '#388bfd !important',
-                },
-              },
-              '&:hover': {
-                bgcolor: 'rgba(177,186,196,0.08)',
-              },
-            },
-          }}
-        >
-          <ToggleButton value="merge">合并</ToggleButton>
-          <ToggleButton value="replace">覆盖</ToggleButton>
-        </ToggleButtonGroup>
-
-        <input
-          ref={fileRef}
-          type="file"
-          accept=".csv,.json,text/csv,application/json"
-          onChange={handleFileChange}
-          style={{ display: 'none' }}
-        />
-
-        <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap', alignItems: 'center' }}>
-          <Button
-            variant="outlined"
-            size="small"
-            startIcon={<UploadIcon />}
-            onClick={handlePickFile}
-            disabled={busy}
-            sx={{
-              flex: '1 0 100%',
-              color: TEXT,
-              borderColor: BORDER,
-              '&:hover': { borderColor: '#8b949e', bgcolor: 'rgba(177,186,196,0.08)' },
-              fontWeight: 600,
-              py: 0.8,
-            }}
-          >
-            选择备份文件
-          </Button>
-          {parsed && (
-            <Button
-              variant="contained"
-              size="small"
-              onClick={handleRestore}
-              disabled={busy}
-              sx={{ bgcolor: GREEN, '&:hover': { bgcolor: '#46c55c' }, fontWeight: 600 }}
-            >
-              确认恢复
-            </Button>
-          )}
-        </Box>
-
-        {parsed && pending && (
-          <Box
-            sx={{
-              mt: 1.5,
-              p: 1.2,
-              borderRadius: '16px',
-              bgcolor: '#0d1117',
-              border: `1px solid ${BORDER}`,
-            }}
-          >
-            <Typography variant="caption" sx={{ color: MUTED, display: 'block', mb: 0.5 }}>
-              待导入：{fileName}
-            </Typography>
-            <Typography variant="body2" sx={{ color: TEXT }}>
-              打卡项目 {pending.items} 项 · 打卡记录 {pending.records} 条 · 待办 {pending.todos} 条
-            </Typography>
-            <Typography variant="caption" sx={{ color: FAINT, display: 'block', mt: 0.5 }}>
-              {mode === 'merge'
-                ? '合并模式：与本地重复的部分会被跳过，仅补充缺失内容。'
-                : '覆盖模式：先清空本地全部数据，再写入本次导入内容。'}
-            </Typography>
-            {parsed.warnings && parsed.warnings.length > 0 && (
-              <Typography variant="caption" sx={{ color: '#d29922', display: 'block', mt: 0.5 }}>
-                {parsed.warnings.join(' ')}
+        {archiveView ? (
+          <Box>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+              <Typography sx={{ color: TEXT, fontWeight: 600, fontSize: '0.9rem' }}>
+                {archiveTotal} 条归档
               </Typography>
+              <Typography variant="caption" sx={{ color: FAINT }}>
+                分布在 {archiveMonths.length} 个月
+              </Typography>
+            </Box>
+            <Typography variant="caption" sx={{ color: FAINT, display: 'block', mb: 1.5 }}>
+              归档表示阶段性收尾：打卡项与待办归档后不再出现在界面上，但归档日之前的历史记录照旧参与统计。
+              在月份里「恢复」即回到界面（旧账一并回来），「彻底删除」会连打卡记录 / STAR 与复盘一起删掉，无法恢复。
+            </Typography>
+            {archiveTotal === 0 ? (
+              <Typography variant="caption" sx={{ color: '#484f58', display: 'block' }}>
+                归档已经清空 —— 点左上角返回。
+              </Typography>
+            ) : (
+              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                {archiveMonths.map((month) => (
+                  <ArchiveMonthSection
+                    key={month.month || 'unknown'}
+                    month={month}
+                    expanded={!!expandedMonths[month.month]}
+                    onToggle={() => toggleMonth(month.month)}
+                    onRestore={(entry) => handleRestoreArchived(entry.kind, entry)}
+                    onDelete={(entry) => askDeleteArchived(entry.kind, entry)}
+                  />
+                ))}
+              </Box>
             )}
           </Box>
-        )}
-
-        {busy && <LinearProgress sx={{ mt: 1.5, bgcolor: '#21262d', '& .MuiLinearProgress-bar': { bgcolor: BLUE } }} />}
-
-        {error && <Notice kind="error">{error}</Notice>}
-
-        {result && (
-          <Notice kind="success">
-            恢复完成：新增打卡项目 {result.items.added} 项（跳过重复 {result.items.kept} 项）、
-            打卡记录 {result.records.added} 条（跳过重复 {result.records.skipped} 条）、
-            待办 {result.todos.added} 条（跳过重复 {result.todos.skipped} 条）。
-            <br />
-            点击「关闭」刷新页面后即可看到最新数据。
-          </Notice>
-        )}
-
-        {/* ===== 归档 ===== */}
-        <Divider sx={{ my: 2, borderColor: BORDER }} />
-
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8, mb: 0.5 }}>
-          <ArchiveIcon fontSize="small" sx={{ color: MUTED }} />
-          <Typography sx={{ color: TEXT, fontWeight: 600, fontSize: '0.9rem' }}>
-            归档
-          </Typography>
-          {archiveTotal > 0 && (
-            <Typography variant="caption" sx={{ color: FAINT }}>{archiveTotal} 条</Typography>
-          )}
-        </Box>
-        <Typography variant="caption" sx={{ color: FAINT, display: 'block', mb: 1 }}>
-          归档表示阶段性收尾：打卡项与待办归档后不再出现在界面上，但归档日之前的历史记录照旧参与统计。
-          在这里「恢复」即回到界面（旧账一并回来），「彻底删除」会连打卡记录 / STAR 与复盘一起删掉，无法恢复。
-        </Typography>
-
-        {archiveTotal === 0 ? (
-          <Typography variant="caption" sx={{ color: '#484f58', display: 'block' }}>
-            还没有归档数据 —— 打卡项与待办卡片右侧都有归档按钮。
-          </Typography>
         ) : (
-          <Box sx={{ bgcolor: '#0d1117', border: `1px solid ${BORDER}`, borderRadius: '16px', px: 1.5, pb: 0.5 }}>
-            {archive.items.length > 0 && (
-              <Box>
-                <Typography variant="caption" sx={{ color: MUTED, fontWeight: 700, display: 'block', mt: 1 }}>
-                  打卡项目（{archive.items.length}）
-                </Typography>
-                {archive.items.map((it) => (
-                  <ArchiveRow
-                    key={it.id}
-                    primary={it.name}
-                    meta={`归档于 ${it.archivedAt || '—'} · 历史打卡 ${it.recordCount} 条${it.lastRecordDate ? `（最近 ${it.lastRecordDate}）` : ''} · 创建于 ${String(it.createdAt || '—').slice(0, 10)}`}
-                    onRestore={() => handleRestoreArchived('item', it)}
-                    onDelete={() => askDeleteArchived('item', it)}
-                  />
-                ))}
-              </Box>
-            )}
-            {archive.todos.length > 0 && (
-              <Box>
-                <Typography variant="caption" sx={{ color: MUTED, fontWeight: 700, display: 'block', mt: 1 }}>
-                  待办事项（{archive.todos.length}）
-                </Typography>
-                {archive.todos.map((td) => (
-                  <ArchiveRow
-                    key={td.id}
-                    primary={td.title}
-                    meta={[
-                      `归档于 ${td.archivedAt || '—'}`,
-                      td.completed ? '已完成' : '未完成',
-                      td.phaseTotal ? `行动 ${td.phaseDone}/${td.phaseTotal}` : '',
-                      td.dueDate ? `截止 ${td.dueDate}` : '',
-                      `创建于 ${String(td.createdAt || '—').slice(0, 10)}`,
-                    ].filter(Boolean).join(' · ')}
-                    onRestore={() => handleRestoreArchived('todo', td)}
-                    onDelete={() => askDeleteArchived('todo', td)}
-                  />
-                ))}
-              </Box>
-            )}
-          </Box>
-        )}
+          <>
+            {/* ===== 概览 ===== */}
+            <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap' }}>
+              <StatCard
+                label="打卡项目"
+                value={overview.itemCount}
+                sub={overview.archivedItemCount ? `项 · 归档 ${overview.archivedItemCount}` : '项'}
+              />
+              <StatCard
+                label="打卡记录"
+                value={overview.recordCount}
+                sub={`覆盖 ${overview.dayCount} 天`}
+              />
+              <StatCard
+                label="待办事项"
+                value={overview.todoCount}
+                sub={
+                  overview.archivedTodoCount
+                    ? `已完成 ${overview.todoDone} · 归档 ${overview.archivedTodoCount}`
+                    : `已完成 ${overview.todoDone} 条`
+                }
+              />
+              <StatCard
+                label="临时任务"
+                value={overview.noteCount}
+                sub={`已完成 ${overview.noteDone} 条`}
+              />
+            </Box>
+            <Typography variant="caption" sx={{ color: FAINT, display: 'block', mt: 1 }}>
+              记录日期范围：{dayRange}
+              {overview.archivedRecordCount
+                ? ` · 其中 ${overview.archivedRecordCount} 条属于已归档的打卡项`
+                : ''}
+            </Typography>
 
-        {/* ===== 桌面版：本机文件保存 + WebDAV 云同步（浏览器版不显示） ===== */}
-        <SmartSyncPanel />
+            <Divider sx={{ my: 2, borderColor: BORDER }} />
+
+            {/* ===== 导出 ===== */}
+            <Typography sx={{ color: TEXT, fontWeight: 600, mb: 0.5, fontSize: '0.9rem' }}>
+              导出
+            </Typography>
+            <Typography variant="caption" sx={{ color: FAINT, display: 'block', mb: 1.5 }}>
+              CSV 为单文件，含打卡项目、打卡记录、待办事项、临时任务四个区块，已归档的数据同样在内
+              （靠「归档日期」列标记），可直接用 Excel 打开；
+              JSON 为无损备份，换设备或跨浏览器迁移请用 JSON。
+            </Typography>
+            <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1.5 }}>
+              <Button
+                variant="contained"
+                size="small"
+                startIcon={<DownloadIcon />}
+                onClick={exportAllCSV}
+                sx={{ bgcolor: BLUE, '&:hover': { bgcolor: '#388bfd' }, fontWeight: 600 }}
+              >
+                导出全量 CSV
+              </Button>
+              <Button
+                variant="outlined"
+                size="small"
+                startIcon={<DownloadIcon />}
+                onClick={exportBackupJSON}
+                sx={{
+                  color: TEXT,
+                  borderColor: BORDER,
+                  '&:hover': { borderColor: '#8b949e', bgcolor: 'rgba(177,186,196,0.08)' },
+                  fontWeight: 600,
+                }}
+              >
+                导出备份 JSON
+              </Button>
+            </Box>
+
+            <Divider sx={{ my: 2, borderColor: BORDER }} />
+
+            {/* ===== 恢复 ===== */}
+            <Typography sx={{ color: TEXT, fontWeight: 600, mb: 0.5, fontSize: '0.9rem' }}>
+              恢复
+            </Typography>
+            <Typography variant="caption" sx={{ color: FAINT, display: 'block', mb: 1.5 }}>
+              支持本应用导出的 CSV 与 JSON 文件。合并只补充本地缺失的数据，不会删除现有内容。
+            </Typography>
+
+            <ToggleButtonGroup
+              value={mode}
+              exclusive
+              onChange={(_e, v) => v && setMode(v)}
+              size="small"
+              sx={{
+                mb: 1.5,
+                display: 'flex',
+                '& .MuiToggleButtonGroup-grouped': {
+                  flex: 1,
+                  borderRadius: '16px !important',
+                  border: '1px solid !important',
+                  borderColor: `${BORDER} !important`,
+                  ml: '0 !important',
+                  bgcolor: 'transparent',
+                },
+                '& .MuiToggleButtonGroup-grouped + .MuiToggleButtonGroup-grouped': {
+                  ml: '8px !important',
+                },
+                '& .MuiToggleButton-root': {
+                  color: TEXT,
+                  fontWeight: 600,
+                  px: 1.5,
+                  py: 0.8,
+                  '&.Mui-selected': {
+                    bgcolor: `${BLUE} !important`,
+                    borderColor: `${BLUE} !important`,
+                    color: '#ffffff',
+                    '&:hover': {
+                      bgcolor: '#388bfd !important',
+                      borderColor: '#388bfd !important',
+                    },
+                  },
+                  '&:hover': {
+                    bgcolor: 'rgba(177,186,196,0.08)',
+                  },
+                },
+              }}
+            >
+              <ToggleButton value="merge">合并</ToggleButton>
+              <ToggleButton value="replace">覆盖</ToggleButton>
+            </ToggleButtonGroup>
+
+            <input
+              ref={fileRef}
+              type="file"
+              accept=".csv,.json,text/csv,application/json"
+              onChange={handleFileChange}
+              style={{ display: 'none' }}
+            />
+
+            <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap', alignItems: 'center' }}>
+              <Button
+                variant="outlined"
+                size="small"
+                startIcon={<UploadIcon />}
+                onClick={handlePickFile}
+                disabled={busy}
+                sx={{
+                  flex: '1 0 100%',
+                  color: TEXT,
+                  borderColor: BORDER,
+                  '&:hover': { borderColor: '#8b949e', bgcolor: 'rgba(177,186,196,0.08)' },
+                  fontWeight: 600,
+                  py: 0.8,
+                }}
+              >
+                选择备份文件
+              </Button>
+              {parsed && (
+                <Button
+                  variant="contained"
+                  size="small"
+                  onClick={handleRestore}
+                  disabled={busy}
+                  sx={{ bgcolor: GREEN, '&:hover': { bgcolor: '#46c55c' }, fontWeight: 600 }}
+                >
+                  确认恢复
+                </Button>
+              )}
+            </Box>
+
+            {parsed && pending && (
+              <Box
+                sx={{
+                  mt: 1.5,
+                  p: 1.2,
+                  borderRadius: '16px',
+                  bgcolor: '#0d1117',
+                  border: `1px solid ${BORDER}`,
+                }}
+              >
+                <Typography variant="caption" sx={{ color: MUTED, display: 'block', mb: 0.5 }}>
+                  待导入：{fileName}
+                </Typography>
+                <Typography variant="body2" sx={{ color: TEXT }}>
+                  打卡项目 {pending.items} 项 · 打卡记录 {pending.records} 条 · 待办 {pending.todos} 条
+                </Typography>
+                <Typography variant="caption" sx={{ color: FAINT, display: 'block', mt: 0.5 }}>
+                  {mode === 'merge'
+                    ? '合并模式：与本地重复的部分会被跳过，仅补充缺失内容。'
+                    : '覆盖模式：先清空本地全部数据，再写入本次导入内容。'}
+                </Typography>
+                {parsed.warnings && parsed.warnings.length > 0 && (
+                  <Typography variant="caption" sx={{ color: '#d29922', display: 'block', mt: 0.5 }}>
+                    {parsed.warnings.join(' ')}
+                  </Typography>
+                )}
+              </Box>
+            )}
+
+            {busy && <LinearProgress sx={{ mt: 1.5, bgcolor: '#21262d', '& .MuiLinearProgress-bar': { bgcolor: BLUE } }} />}
+
+            {error && <Notice kind="error">{error}</Notice>}
+
+            {result && (
+              <Notice kind="success">
+                恢复完成：新增打卡项目 {result.items.added} 项（跳过重复 {result.items.kept} 项）、
+                打卡记录 {result.records.added} 条（跳过重复 {result.records.skipped} 条）、
+                待办 {result.todos.added} 条（跳过重复 {result.todos.skipped} 条）。
+                <br />
+                点击「关闭」刷新页面后即可看到最新数据。
+              </Notice>
+            )}
+
+            {/* ===== 归档 ===== */}
+            <Divider sx={{ my: 2, borderColor: BORDER }} />
+
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8, mb: 0.5 }}>
+              <ArchiveIcon fontSize="small" sx={{ color: MUTED }} />
+              <Typography sx={{ color: TEXT, fontWeight: 600, fontSize: '0.9rem' }}>
+                归档
+              </Typography>
+              {archiveTotal > 0 && (
+                <Typography variant="caption" sx={{ color: FAINT }}>{archiveTotal} 条</Typography>
+              )}
+            </Box>
+            <Typography variant="caption" sx={{ color: FAINT, display: 'block', mb: 1 }}>
+              归档表示阶段性收尾：打卡项与待办归档后不再出现在界面上，但归档日之前的历史记录照旧参与统计。
+              归档内容按月份收在子界面里，进去后逐月恢复或删除，不在这里排成长列表。
+            </Typography>
+
+            {archiveTotal === 0 ? (
+              <Typography variant="caption" sx={{ color: '#484f58', display: 'block' }}>
+                还没有归档数据 —— 打卡项与待办卡片右侧都有归档按钮。
+              </Typography>
+            ) : (
+              <Box
+                sx={{
+                  bgcolor: '#0d1117',
+                  border: `1px solid ${BORDER}`,
+                  borderRadius: '16px',
+                  px: 1.5,
+                  py: 1.2,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 1,
+                }}
+              >
+                <Box sx={{ flex: 1, minWidth: 0 }}>
+                  <Typography variant="body2" sx={{ color: TEXT, fontWeight: 600 }}>
+                    共 {archiveTotal} 条归档
+                  </Typography>
+                  <Typography variant="caption" sx={{ color: FAINT, display: 'block', mt: 0.2 }}>
+                    打卡项目 {archive.items.length} 项 · 待办 {archive.todos.length} 条 · 分布在 {archiveMonths.length} 个月
+                  </Typography>
+                </Box>
+                <Button
+                  variant="outlined"
+                  size="small"
+                  endIcon={<ChevronRightIcon fontSize="small" />}
+                  onClick={openArchiveView}
+                  sx={{
+                    color: TEXT,
+                    borderColor: BORDER,
+                    '&:hover': { borderColor: '#8b949e', bgcolor: 'rgba(177,186,196,0.08)' },
+                    fontWeight: 600,
+                  }}
+                >
+                  按月查看
+                </Button>
+              </Box>
+            )}
+
+            {/* ===== 桌面版：本机文件保存 + WebDAV 云同步（浏览器版不显示） ===== */}
+            <SmartSyncPanel />
+          </>
+        )}
 
         <ConfirmDialog
           open={!!pendingDelete}

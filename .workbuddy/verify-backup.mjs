@@ -394,4 +394,39 @@ assert.equal(getArchivedCheckinItems().length, 0, '旧备份不该造出归档�
 assert.equal(getArchivedTodos().length, 0);
 console.log('OK: 归档状态在 CSV / JSON 两条路径往返无损，缺列的旧备份安全降级为未归档');
 
+/* ---- 11. 归档子界面按月分组 ---- */
+localStorage.clear();
+localStorage.setItem('daily_checkin_items', JSON.stringify([
+  { id: 'a1', name: '九月归档项', createdAt: '2026-09-01', archived: true, archivedAt: '2026-09-15', order: 0 },
+  { id: 'a2', name: '十月归档项', createdAt: '2026-09-01', archived: true, archivedAt: '2026-10-03', order: 1 },
+  { id: 'a3', name: '脏日期项', createdAt: '2026-09-01', archived: true, archivedAt: '', order: 2 },
+]));
+localStorage.setItem('daily_todos', JSON.stringify([
+  { id: 't1', title: '九月归档待办', createdAt: '2026-09-02', archived: true, archivedAt: '2026-09-20', order: 0 },
+  { id: 't2', title: '未归档待办', createdAt: '2026-09-02', order: 1 },
+]));
+
+const monthGroups = backup.groupArchiveByMonth(backup.getArchiveInventory());
+assert.deepEqual(monthGroups.map((g) => g.month), ['2026-10', '2026-09', ''], '月份应倒序，缺归档日期的排最后');
+assert.equal(monthGroups[0].label, '2026年10月');
+assert.equal(monthGroups[2].label, '未记录归档日期');
+assert.deepEqual(monthGroups[0].entries.map((e) => e.id), ['a2']);
+assert.deepEqual(monthGroups[0].entries.map((e) => e.kind), ['item']);
+assert.deepEqual(
+  monthGroups[1].entries.map((e) => `${e.kind}:${e.id}`),
+  ['todo:t1', 'item:a1'],
+  '同月内打卡项与待办应合并，并按归档日倒序',
+);
+assert.equal(
+  monthGroups.reduce((n, g) => n + g.entries.length, 0),
+  4,
+  '分组前后条数必须相等，脏日期只能让它落在最后，不能把条目分丢',
+);
+assert.ok(
+  !monthGroups.some((g) => g.entries.some((e) => e.id === 't2')),
+  '未归档的数据不该进归档子界面',
+);
+assert.deepEqual(backup.groupArchiveByMonth({ items: [], todos: [] }), [], '无归档时分组为空');
+console.log('OK: 归档按月分组正确 —— 月份倒序、同月合并两类数据、缺归档日期的归到末尾且条目不丢');
+
 console.log('\n全部验证通过 ✅');
