@@ -11,7 +11,7 @@ contextBridge.exposeInMainWorld('daymark', {
   saveSnapshotSync: (data) => ipcRenderer.sendSync('daymark:save-snapshot-sync', data),
   getConfig: () => ipcRenderer.invoke('daymark:get-config'),
   setConfig: (cfg) => ipcRenderer.invoke('daymark:set-config', cfg),
-  testConnection: () => ipcRenderer.invoke('daymark:test-connection'),
+  testConnection: (input) => ipcRenderer.invoke('daymark:test-connection', input),
   pushNow: (force) => ipcRenderer.invoke('daymark:push-now', force),
   pullNow: (force) => ipcRenderer.invoke('daymark:pull-now', force),
   onSyncStatus: (cb) => {

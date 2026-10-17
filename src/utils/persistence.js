@@ -98,9 +98,9 @@ export function saveCloudConfig(cfg) {
   return window.daymark.setConfig(cfg).catch(() => null);
 }
 
-export function testCloudConnection() {
+export function testCloudConnection(input) {
   if (!isElectron()) return Promise.resolve({ ok: false, error: '当前非桌面环境' });
-  return window.daymark.testConnection().catch((e) => ({ ok: false, error: String(e) }));
+  return window.daymark.testConnection(input).catch((e) => ({ ok: false, error: String(e) }));
 }
 
 export function pushNow(force) {

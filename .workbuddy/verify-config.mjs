@@ -192,6 +192,32 @@ try {
   assert.ok(!('passwordEnc' in pub2), '回显副本不得包含密文字段');
   console.log('OK: 配置回显不含任何形态的密码');
 
+  // 「测试连接」必须吃表单值：过去它只读盘上那份，用户改了密码没点保存就测试，
+  // 送去验证的仍是旧密码，表现成"不管输什么都报 401"。这里锁住三层接线不被改回。
+  const mainSrc = fs.readFileSync(new URL('../electron/main.js', import.meta.url), 'utf8');
+  assert.match(
+    mainSrc,
+    /daymark:test-connection[\s\S]{0,260}mergeConfigInput\(readCfg\(\), input\)/,
+    'test-connection 应把表单叠到已存配置上（密码留空＝沿用已存），而不是只读盘',
+  );
+  assert.ok(
+    !/daymark:test-connection[\s\S]{0,120}const cfg = readCfg\(\);/.test(mainSrc),
+    'test-connection 不得退回"只读盘上配置"的旧写法',
+  );
+  const preloadSrc = fs.readFileSync(new URL('../electron/preload.cjs', import.meta.url), 'utf8');
+  assert.match(
+    preloadSrc,
+    /testConnection: \(input\) => ipcRenderer\.invoke\('daymark:test-connection', input\)/,
+    'preload 要把表单参数透传给主进程',
+  );
+  const panelSrc = fs.readFileSync(new URL('../src/components/SyncPanel.jsx', import.meta.url), 'utf8');
+  assert.match(
+    panelSrc,
+    /testCloudConnection\(\{ account, password, server, dir \}\)/,
+    '界面要把当前填写的账号 / 密码 / 地址 / 目录送进测试',
+  );
+  console.log('OK: 测试连接走表单值（preload 透传 + 主进程合并不落盘 + 界面传参）三层接线完整');
+
   console.log('\n全部验证通过 ✅');
 } finally {
   fs.rmSync(dir, { recursive: true, force: true });

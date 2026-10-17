@@ -109,9 +109,14 @@ function SyncPanel() {
   };
 
   const handleTest = async () => {
+    // 用输入框里的当前内容去测，不必先保存；密码留空才沿用已保存的那份
+    if (!account.trim() || (!password.trim() && !passwordSet)) {
+      showNotice('error', '请填写账号与用于授权第三方 WebDAV 应用访问的 16 位随机应用密码，或先「保存配置」再测试。');
+      return;
+    }
     setBusy(true);
     setNotice(null);
-    const res = await testCloudConnection();
+    const res = await testCloudConnection({ account, password, server, dir });
     showNotice(res.ok ? 'success' : 'error', res.ok ? '连接成功，认证有效。' : (res.error || '连接失败。'));
     setBusy(false);
   };
@@ -262,6 +267,9 @@ function SyncPanel() {
               sx={{ m: 0 }}
             />
           </Box>
+          <Typography variant="caption" sx={{ color: FAINT, display: 'block', mt: 1, lineHeight: 1.6 }}>
+            「测试连接」用的就是上面当前填写的内容，不必先保存；「立即上传 / 立即下载」与自动同步用的是已保存的配置，改完记得点「保存配置」。
+          </Typography>
 
           <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap', mt: 2 }}>
             <Button
