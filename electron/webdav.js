@@ -34,12 +34,31 @@ function b64(str) {
 }
 
 /**
+ * 归一化用户填写的远程目录：只认 `/` 分段，所以
+ * - 反斜杠（从资源管理器粘的 Windows 路径）换成 `/`
+ * - 丢掉开头的「我的坚果云」——WebDAV 的根就是它，多带一层就 409
+ * - 去掉首尾斜杠与空白
+ * 中文、空格、`#` 原样保留，交给 encodeWebdavPath 逐段编码。
+ * @param {string} dir
+ * @returns {string}
+ */
+export function normalizeWebdavDir(dir) {
+  const segs = String(dir == null ? '' : dir)
+    .trim()
+    .replace(/\\/g, '/')
+    .split('/')
+    .map((s) => s.trim())
+    .filter((s) => s !== '');
+  while (segs.length && (segs[0] === '我的坚果云' || segs[0] === 'MyJianguoyun')) segs.shift();
+  return segs.join('/');
+}
+
+/**
  * 逐段编码 WebDAV 路径：坚果云目录名允许空格、#、中文等字符，
  * 不编码会让 URL 变形（空格截断、# 之后被当片段），表现为莫名的 404。
  */
 export function encodeWebdavPath(dir) {
-  return String(dir)
-    .replace(/^\/+|\/+$/g, '')
+  return normalizeWebdavDir(dir)
     .split('/')
     .filter((s) => s !== '')
     .map(encodeURIComponent)
@@ -133,14 +152,20 @@ export function describeAuthFailure(info = {}) {
  * @param {string} [detail] 认证类错误的补充诊断（describeAuthFailure 的产出）
  */
 export function describeHttpError(method, status, detail) {
+  // detail 一律附在句尾：401 是认证诊断，409 / 403 是实际请求路径，都靠它才看得懂
+  const tail = detail ? `。${detail}` : '';
   if (status === 401) {
-    return `${method} 认证失败：请检查 WebDAV 账号与${APP_PASSWORD_NAME}${detail ? `。${detail}` : ''}`;
+    return `${method} 认证失败：请检查 WebDAV 账号与${APP_PASSWORD_NAME}${tail}`;
   }
-  if (status === 403) return `${method} 权限不足：账号无权写入该路径`;
-  if (status === 404) return `${method} 404：云端文件/目录不存在`;
-  if (status === 409 || status === 405) return `${method} 409：目标已存在或需先创建目录`;
-  if (status === 507) return `${method} 507：云端存储空间不足`;
-  return `${method} 失败（HTTP ${status}）`;
+  if (status === 403) return `${method} 权限不足：账号无权写入该路径${tail}`;
+  if (status === 404) return `${method} 404：云端文件/目录不存在${tail}`;
+  if (status === 409 || status === 405) {
+    // 同一个 409 在建目录时是"目录已在"（ensureDir 已按成功处理），在读写文件时
+    // 坚果云多半是在说"父目录不存在"——所以必须把实际请求的路径带出来
+    return `${method} 409：路径不存在或已存在（读 / 写时通常是「远程目录」写错了）${tail}`;
+  }
+  if (status === 507) return `${method} 507：云端存储空间不足${tail}`;
+  return `${method} 失败（HTTP ${status}）${tail}`;
 }
 
 /**
@@ -251,6 +276,21 @@ export class Jianguoyun {
     });
   }
 
+  /**
+   * 路径类错误（409 / 403）时把实际请求的 URL 带出来——凭据只在 Authorization 头里，
+   * URL 本身不含密钥，可以直接展示给用户自查「远程目录」。
+   */
+  pathDetail(res) {
+    if (!res || (res.status !== 409 && res.status !== 403)) return '';
+    return `实际请求的路径：${this.url}；「远程目录」要用 / 分段、不带开头的「我的坚果云」（WebDAV 根就是它），反斜杠会被当成文件名的一部分`;
+  }
+
+  /** 统一的抛错出口：401 给认证诊断，409/403 给实际路径 */
+  failWith(method, res) {
+    const detail = res && res.status === 401 ? this.authDetail(res) : this.pathDetail(res);
+    return new Error(describeHttpError(method, res && res.status, detail));
+  }
+
   /** 同目录下的备份文件地址（不新建子目录，免去二次 MKCOL） */
   urlFor(fileName) {
     return `${this.dirUrl}/${fileName}`;
@@ -263,7 +303,7 @@ export class Jianguoyun {
     const res = await webdavRequest({ url: this.dirUrl, method: 'MKCOL', auth: this.auth });
     // 405/409 表示目录已存在，视为成功；401 等其它错误抛出
     if (res.status === 405 || res.status === 409 || res.status === 201 || res.status === 200) return;
-    throw new Error(describeHttpError('MKCOL', res.status, res.status === 401 ? this.authDetail(res) : ''));
+    throw this.failWith('MKCOL', res);
   }
 
   /**
@@ -274,7 +314,7 @@ export class Jianguoyun {
     await this.ensureDir();
     const res = await webdavRequest({ url: this.url, method: 'PUT', auth: this.auth, body: jsonString });
     if (res.status < 200 || res.status >= 300) {
-      throw new Error(describeHttpError('PUT 上传', res.status, res.status === 401 ? this.authDetail(res) : ''));
+      throw this.failWith('PUT 上传', res);
     }
   }
 
@@ -287,7 +327,7 @@ export class Jianguoyun {
     await this.ensureDir();
     const res = await webdavRequest({ url: this.urlFor(fileName), method: 'PUT', auth: this.auth, body: jsonString });
     if (res.status < 200 || res.status >= 300) {
-      throw new Error(describeHttpError('PUT 备份', res.status, res.status === 401 ? this.authDetail(res) : ''));
+      throw this.failWith('PUT 备份', res);
     }
   }
 
@@ -299,7 +339,7 @@ export class Jianguoyun {
     const res = await webdavRequest({ url: this.url, method: 'GET', auth: this.auth });
     if (res.status === 404) return { status: 404, data: null };
     if (res.status < 200 || res.status >= 300) {
-      throw new Error(describeHttpError('GET 下载', res.status, res.status === 401 ? this.authDetail(res) : ''));
+      throw this.failWith('GET 下载', res);
     }
     let data;
     try {

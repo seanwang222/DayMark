@@ -10,7 +10,7 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
-import { Jianguoyun, resolveLatest, planPull, planPush, backupFileName, pruneBackups, webdavRequest, buildRemoteUrl, encodeWebdavPath, describeAuthFailure, APP_PASSWORD_NAME, SNAPSHOT_FILENAME, BACKUP_NAME_RE } from '../electron/webdav.js';
+import { Jianguoyun, resolveLatest, planPull, planPush, backupFileName, pruneBackups, webdavRequest, buildRemoteUrl, encodeWebdavPath, normalizeWebdavDir, describeAuthFailure, APP_PASSWORD_NAME, SNAPSHOT_FILENAME, BACKUP_NAME_RE } from '../electron/webdav.js';
 
 /* ==================== mock 坚果云服务 ==================== */
 
@@ -33,6 +33,15 @@ function startMockServer() {
       if (p.startsWith('/dav/Hang/')) {
         req.resume();
         return;
+      }
+
+      // 模拟坚果云对"父目录不存在"的读写返回 409（而不是 404）
+      if (p.startsWith('/dav/Conflict409/')) {
+        if (req.method === 'GET' || req.method === 'PUT') {
+          res.statusCode = 409;
+          res.end();
+          return;
+        }
       }
 
       const send = (code, body) => {
@@ -331,6 +340,39 @@ async function run() {
   }
   assert.ok(Date.now() - t0 < 5000, `超时应尽快返回，实际耗时 ${Date.now() - t0}ms`);
   console.log('OK: 无响应的服务端请求按超时中断并给出可读错误');
+
+  // 11. 远程目录归一化：用户粘的是资源管理器里的 Windows 路径
+  assert.equal(
+    normalizeWebdavDir('我的坚果云\\0_个人\\0_PersonalDoc\\00000000_DayMark'),
+    '0_个人/0_PersonalDoc/00000000_DayMark',
+    '反斜杠要转成 / 并丢掉「我的坚果云」这一层（WebDAV 根就是它）',
+  );
+  assert.equal(normalizeWebdavDir('  /DayMark/  '), 'DayMark', '首尾斜杠与空白要丢掉');
+  assert.equal(normalizeWebdavDir('A//B/'), 'A/B', '空段要合并');
+  assert.equal(normalizeWebdavDir(''), '', '空目录保持空，由调用方回落默认');
+  assert.equal(
+    buildRemoteUrl({
+      baseUrl: 'https://dav.jianguoyun.com/dav/',
+      dir: '我的坚果云\\0_个人\\Day Mark#1',
+      fileName: SNAPSHOT_FILENAME,
+    }),
+    'https://dav.jianguoyun.com/dav/0_%E4%B8%AA%E4%BA%BA/Day%20Mark%231/daymark-snapshot.json',
+    'Windows 路径 + 空格 + # 要拼成合法 URL',
+  );
+
+  // 11b. 读写撞上"父目录不存在"的 409：必须把实际请求路径带出来，否则用户看不懂
+  const conflictClient = new Jianguoyun({ account: USER, password: PASS, dir: 'Conflict409/Sub', baseUrl });
+  try {
+    await conflictClient.pull();
+    assert.fail('409 应报错');
+  } catch (err) {
+    assert.match(err.message, /409/, `应报 409，实际: ${err.message}`);
+    assert.match(err.message, /远程目录/, `409 应指向「远程目录」这个排查方向，实际: ${err.message}`);
+    assert.match(err.message, /实际请求的路径：/, `409 应带出实际 URL，实际: ${err.message}`);
+    assert.ok(err.message.includes('Conflict409/Sub'), `应能看到请求的目录，实际: ${err.message}`);
+    assert.ok(!err.message.includes(PASS), '409 提示里不能出现密码');
+  }
+  console.log('OK: 远程目录按 WebDAV 语义归一化，409 带出实际请求路径且不泄露密码');
 
   mockServer.close();
 

@@ -8,6 +8,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { normalizeWebdavDir } from './webdav.js';
 
 export const CONFIG_FILENAME = 'daymark-config.json';
 
@@ -142,7 +143,9 @@ export function mergeConfigInput(current, input = {}) {
         ? input.password.trim()
         : current.password,
     server: (input.server || '').trim(),
-    dir: (input.dir || 'DayMark').trim() || 'DayMark',
+    // 远程目录按 WebDAV 语义归一化（反斜杠→斜杠、去掉「我的坚果云」前缀），
+    // 用户从资源管理器粘路径是常态；归一化后为空则回落默认目录
+    dir: normalizeWebdavDir(input.dir) || 'DayMark',
     autoSync: !!input.autoSync,
   };
 }
