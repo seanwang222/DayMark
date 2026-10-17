@@ -25,11 +25,11 @@ DayMark（React 18 + Vite 4 渲染层，Electron 44 桌面层）的协作约定�
 - 桌面版落盘走主进程：`.tmp` + 同卷 `renameSync` 原子写。**不要退回单步 `writeFileSync`**，半截 JSON 会被 `readLocal` 当作「本机为空」，一次同步就把「空」推上云端。
 - 冲突策略是「只在会丢较新一方时动手，且动手前先留档」。决策逻辑是纯函数 `planPull` / `planPush`（`electron/webdav.js`），主进程只负责执行动作；新需求请扩这两个函数并补 `verify:webdav` 用例，不要把判断写进 IPC handler。
 - **统计口径**：某天进不进分母，只问 `storage.js` 的 `isItemActiveOn(item, dateStr)`（在册 = `createdAt ≤ 当天 < archivedAt`）。分母只算「当天在册的打卡项」，且未到来的日子不参与统计。分日实现是 `getMonthlyData`（季/年视图从它汇总，`CheckinCalendar` 也必须直接消费它的输出含 `excluded`，**不要在组件里再抄一份 filter**——1.1.1 之前那套「月历自己算一套」就是最容易复发的缺陷）。单项目与多项聚合的 `total` 必须能相加对齐 —— 改这里同时跑 `verify:stats`。
-- **汇总统计只按所选区间算**：打卡页统计卡的完成天数 / 完成率 / 当前连续 / 最长连续全部落在 `getViewRange(view, year, month, quarter)` 给出的区间里，实现唯一是 `statsFromRange`（`getItemStats(itemId, range)` 与 `getOverallStats(range)` 都汇到它）。连续段不跨越区间边界；`skip` 的那天既不进分母也不打断连续；区间整体在未来时返回 `empty: true`，界面显示「—」而不是 0%。不要把这四个数字再改回「创建日至今」的总账。
+- **汇总统计只按所选区间算**：打卡页统计卡的完成天数 / 完成率 / 当前连续 / 最长连续全部落在 `getViewRange(view, year, month, quarter)` 给出的区间里，实现唯一是 `statsFromRange`（`getItemStats(itemId, range)` 与 `getOverallStats(range)` 都汇到它）。连续段不跨越区间边界；`skip` 的那天既不进分母也不打断连续；区间整体在未来时返回 `empty: true`，界面显示「—」而不是 0%。不要把这四个数字再改回「创建日至今」的总账。**1.1.4 起 `getViewRange` 还返回 `dayBasis`，决定「不在册的日子算不算分母」**：月度 = `active`（求交在册区间，项目诞生前不算未完成），季度 / 年度 = `period`（分母就是这段区间**已经过去的天数**，过去的整季 92 天、整年 365 天，不再被创建日与归档日裁短）。这个开关只由上面两个统计入口读，**不要塞进 `statsFromRange`**——它只负责一天天走，把项目数组递进逐日循环器等于让遍历器同时决定口径。未来的日子在两套基数下都被 `end` 裁掉；连续段在 `period` 下会被诞生前那些「没达成」的日子切断，这是本条口径的应有代价。回归见 `verify:stats` 场景 J 与场景 L。
 - **归档（1.1.2 起）不新增存储键**：打卡项与待办仍共用原数组，归档只是加 `archived` / `archivedAt` 两个字段，所以 `getAllData()` / `applySnapshot()` / 快照落盘 / WebDAV 都不用改。但要盯住三处白名单重建，漏一个就静默丢归档状态：`normalizeTodo()`、`setAllData()` 里打卡项的重建、`backup.js` 的 CSV 列与解析（旧备份缺列必须安全回落为未归档）。**界面取数只走 `getActiveCheckinItems()` / `getActiveTodos()`**（`getCheckinItems()` / `getTodos()` 是含归档的全量，只给备份与归档清单用），归档的查看与恢复入口唯一在「数据管理 → 归档」，不要在页面里另起一个归档列表。1.1.3 起该入口是弹窗内的**按月子界面**：主界面只给一行汇总 +「按月查看」，分组的唯一实现是 `backup.js` 的纯函数 `groupArchiveByMonth(getArchiveInventory())`（月份倒序、同月合并打卡项与待办、`archivedAt` 非法或缺失一律归到末尾「未记录归档日期」且分组前后条数必须相等），组件里不要再自己算月份。回归见 `verify:stats` 场景 K、`verify:todo` 第 7 组、`verify:backup` 第 10 与第 11 组、`verify:persistence` 第 6.5 组。
 - `reorderCheckinItems()` / `reorderTodos()` 收到的是「界面当前可见」的 id 列表，**不等于整组数据**：归档项（以及任何没被传入的条目）必须按原顺序追加写回，不能拿传入数组直接覆盖存储。取消归档用 `delete` 掉两个字段，别写 `archived: false`，这样恢复后的记录与从未归档过逐字节等价。
 - 「已过期」判定统一走 `storage.js` 的 `isPastDue(completed, dueDate, todayStr)`。**不要在现场直接写 `dueDate < todayStr`**：空 `dueDate` 参与字符串比较恒为真，会把所有无截止日的待办标成过期。
-- 日程页「提醒」的取数与排序是 `storage.js` 的 `getUpcomingPhases(withinDays, todayStr)`，只有一个排序键（剩余天数升序，逾期为负故自然置顶）。改窗口或改排序都去扩 `verify:todo` 第 6 组，不要在页面里另写一套。
+- 日程页「提醒」的取数与排序是 `storage.js` 的 `getUpcomingPhases(withinDays, todayStr)`，只有一个排序键（剩余天数升序，逾期为负故自然置顶）。1.1.4 起 `daysLeft === 0`（今天到期）也不进提醒：那些行动已经列在同一屏上方的「行动」分组里，重复列出只会把要往前看的项挤出视野——数据与 `phase.dueDate` 没有任何变化，纯粹是展示归属。**不要在页面里过滤**，否则提醒与「行动」的计数又会各算一套。改窗口、改排序、改「谁进提醒」都去扩 `verify:todo` 第 6 组，不要在页面里另写一套。
 - CSV 的公式注入护栏是成对的：`csvCell` 给以 `= + - @` 开头的内容加前置撇号，`parseCSV` 再脱掉。改其中一处必须同时改另一处，否则「导出 → 恢复」会多出一个撇号（`verify:backup` 有往返用例）。
 
 ## 2. 桌面层约定
@@ -58,4 +58,6 @@ DayMark（React 18 + Vite 4 渲染层，Electron 44 桌面层）的协作约定�
 ## 4. 界面约定
 
 - 中文界面、暗色主题；配色分两套：**完成频率色阶 = 纯蓝**（`src/utils/colors.js` 的 `getRateColor`），**状态语义（完成/勾选）= 绿**，不要混用或回到分档硬编码。
+- **日程页的分区色各占一个色相**：打卡 = 绿 `#3fb950`、待办 = 琥珀 `#d29922`、行动 = 蓝 `#58a6ff`、提醒 = 紫色系（`SchedulePage.jsx` 的 `REMINDER_COLOR` / `REMINDER_COLOR_SOON` / `REMINDER_COLOR_LATER`）。红色 `#f85149` 在本页只保留给「已过期 / 已逾期」这个状态语义，不给某个分区当身份色；提醒的紧急度也用紫色由亮到暗，别再拿琥珀与蓝去分级（那会和待办、行动撞色，1.1.4 就是为此把提醒整段换紫）。完成率色阶仍然只有 `colors.js` 一处。
+- **日程页勾选后不得新增只在完成后才出现的行**：右栏的打卡项与临时任务都曾经在下一次渲染时补一行「完成于 hh:mm」，把下面的分组整体往下推，用户点完一个勾就看见列表跳。完成时间照旧写进数据（`rec.time` / `doneAt`，打卡页与备份都能看得到），只是不再在日程页显示。要往这个页面加任何「完成后才显示」的信息（时间、备注、复盘摘要），先想清楚它会不会改变行高——改行高就给它一个恒定占位，别复现这种跳动。
 - MUI 与 Tailwind 并存，组件内优先沿用邻近文件的既有写法，不为样式引入新依赖。

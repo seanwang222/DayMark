@@ -71,6 +71,8 @@ function daysBetween(a, b) {
  * 未来 withinDays 天内需要完成的行动项（含已逾期的），按紧急度从高到低排列。
  * 排序只有一个键：剩余天数升序 —— 逾期项是负数，因此天然置顶，无需再单独分类。
  * 未设截止日的行动项无法判定紧急度，不进提醒；所属待办已完成时其行动也不再提醒。
+ * 今天到期（daysLeft === 0）同样不进提醒：日程页右栏的「行动」当天已经列出了这些行动，
+ * 在同一屏里再抄一遍只会让同一件事占两行，还会把真正需要往前看的项挤出视野。
  * @returns {Array<{todo:Object, phase:Object, dueDate:string, daysLeft:number, overdue:boolean}>}
  */
 export function getUpcomingPhases(withinDays = 7, todayStr = getToday()) {
@@ -80,7 +82,7 @@ export function getUpcomingPhases(withinDays = 7, todayStr = getToday()) {
     (todo.phases || []).forEach((phase) => {
       if (phase.completed || !phase.dueDate) return;
       const daysLeft = daysBetween(todayStr, phase.dueDate);
-      if (daysLeft > withinDays) return;
+      if (daysLeft === 0 || daysLeft > withinDays) return;
       out.push({ todo, phase, dueDate: phase.dueDate, daysLeft, overdue: daysLeft < 0 });
     });
   });
@@ -614,22 +616,33 @@ function lastDayOfMonth(year, month) {
 /**
  * 月度 / 季度 / 年度视图对应的统计区间（首尾都含，YYYY-MM-DD）。
  * 这里只回答「看哪一段」，是否超出今天由 statsFromRange 裁剪。
+ *
+ * dayBasis 决定「分母是谁的天数」：
+ * - `period`（季度 / 年度）：分母 = 这段区间**已经过去的天数**，不与项目的在册区间求交。
+ *   看第三季度就该按 92 天衡量，而不是只按项目恰好诞生的那 30 天——否则季度视图的分母
+ *   会被创建日、归档日裁成一小截，读起来跟月度视图没区别。代价是晚建的项目要背上
+ *   「这个季度已经过去的日子」，完成率会低于按在册天数算的那一份。
+ * - `active`（月度）：沿用「当天在册才参与」的口径，项目诞生前、归档日及以后整天跳过，
+ *   不把一个还没出现的项目算成「这个月没打卡」。
+ *
  * @param {'monthly'|'quarterly'|'yearly'} view
  */
 export function getViewRange(view, year, month, quarter) {
   if (view === 'yearly') {
-    return { start: `${year}-01-01`, end: `${year}-12-31` };
+    return { start: `${year}-01-01`, end: `${year}-12-31`, dayBasis: 'period' };
   }
   if (view === 'quarterly') {
     const first = (quarter - 1) * 3 + 1;
     return {
       start: `${year}-${pad2(first)}-01`,
       end: `${year}-${pad2(first + 2)}-${pad2(lastDayOfMonth(year, first + 2))}`,
+      dayBasis: 'period',
     };
   }
   return {
     start: `${year}-${pad2(month)}-01`,
     end: `${year}-${pad2(month)}-${pad2(lastDayOfMonth(year, month))}`,
+    dayBasis: 'active',
   };
 }
 
@@ -640,7 +653,8 @@ export function getViewRange(view, year, month, quarter) {
  * 界面只负责显示——避免出现「月历一套口径、汇总一套口径」那种错得很安静的分裂。
  *
  * classify(dateStr) → 'done' | 'miss' | 'skip'。skip 的那天整天不参与：
- * 既不进分母，也不把连续段打断（项目还没创建、已经归档、日子还没到来都属于 skip）。
+ * 既不进分母，也不把连续段打断。「项目还没创建 / 已经归档」算不算 skip 由调用方按
+ * getViewRange 的 dayBasis 决定（月度算、季度与年度不算），本函数只管走日子。
  * 结束日一律裁剪到今天，未来的日子不配拉低完成率。
  */
 function statsFromRange(startStr, endStr, classify, meta) {
@@ -737,9 +751,12 @@ function isRecordDone(v) {
  * 单个打卡项目的汇总统计
  *
  * @param {string} itemId
- * @param {{start?:string, end?:string}} [range] 统计区间（月度 / 季度 / 年度视图传入）。
- *   不传即全生命周期（创建日 → 今天）。区间会与项目的「在册区间」求交：
- *   创建日之前、归档日及以后都不参与，因此切换视图不会追溯改写历史月份的数字。
+ * @param {{start?:string, end?:string, dayBasis?:'active'|'period'}} [range] 统计区间
+ *   （月度 / 季度 / 年度视图由 getViewRange 给出）。不传即全生命周期（创建日 → 今天）。
+ *   `dayBasis:'active'`（月度与默认）会与项目的「在册区间」求交：创建日之前、归档日及以后
+ *   都不参与，因此切换视图不会追溯改写历史月份的数字。
+ *   `dayBasis:'period'`（季度 / 年度）从区间首日开始，在册与否都进分母，
+ *   分母就是「这段区间已经过去多少天」。
  * @returns {null|{itemId:string, name:string, createdAt:string, empty:boolean,
  *   rangeStart:string, rangeEnd:string, totalDays:number, doneDays:number, missedDays:number,
  *   rate:number, currentStreak:number, longestStreak:number, firstDone:string, lastDone:string}}
@@ -750,17 +767,21 @@ export function getItemStats(itemId, range) {
   const target = items.find((i) => i.id === itemId);
   if (!target) return null;
 
+  const periodDays = !!(range && range.dayBasis === 'period');
   const created = target.createdAt ? String(target.createdAt).slice(0, 10) : '';
   const allDates = Object.keys(records).sort();
   const lifeStart = created || (allDates.length > 0 ? allDates[0] : getToday());
-  const start = range && range.start && range.start > lifeStart ? range.start : lifeStart;
+  const start = periodDays && range.start
+    ? range.start
+    : (range && range.start && range.start > lifeStart ? range.start : lifeStart);
   const end = range && range.end ? range.end : getToday();
 
   return statsFromRange(
     start,
     end,
     (dateStr) => {
-      if (!isItemActiveOn(target, dateStr)) return 'skip';
+      // period 基数下「不在册」不再是跳过的理由：那天确实过去了，只是没达成
+      if (!periodDays && !isItemActiveOn(target, dateStr)) return 'skip';
       return isRecordDone(records[dateStr] && records[dateStr][itemId]) ? 'done' : 'miss';
     },
     { itemId, name: target.name, createdAt: target.createdAt || '' },
@@ -771,11 +792,14 @@ export function getItemStats(itemId, range) {
  * 全部项目的聚合统计（与单项目 getItemStats 同构，天级「全勤日」口径）
  *
  * 每一天按「当日在册（已创建且未归档）的项目是否全部打卡完成」判定为完成日（全勤日）或未完成日。
- * 某天没有任何在册项目时整天不参与，也不打断连续段。因此：
+ * 某天没有任何在册项目时，月度口径下整天不参与、也不打断连续段；季度 / 年度的 period 口径下
+ * 记为「这天没达成」。因此：
  * - 完成天数 = 全勤天数；完成率 = 全勤率
  * - 当前连续 / 最长连续 = 连续全勤天数（结束于区间末或其前一天都不算中断）
  *
- * @param {{start?:string, end?:string}} [range] 同 getItemStats，不传即全生命周期
+ * @param {{start?:string, end?:string, dayBasis?:'active'|'period'}} [range] 同 getItemStats，
+ *   不传即全生命周期。`dayBasis:'period'` 时某天没有任何在册项目也算「这一天没达成」，
+ *   分母仍是区间已过去的天数；`active` 时那样的日子整天跳过，既不进分母也不打断连续段。
  * @returns {null|{itemId:null, name:'全部项目', createdAt:string, empty:boolean,
  *   rangeStart:string, rangeEnd:string, totalDays:number, doneDays:number, missedDays:number,
  *   rate:number, currentStreak:number, longestStreak:number, firstDone:string, lastDone:string}}
@@ -785,6 +809,7 @@ export function getOverallStats(range) {
   const records = getCheckinRecords();
   if (items.length === 0) return null;
 
+  const periodDays = !!(range && range.dayBasis === 'period');
   const today = getToday();
   const allDates = Object.keys(records).sort();
 
@@ -795,9 +820,11 @@ export function getOverallStats(range) {
       : m),
     allDates[0] || today,
   );
-  const start = range && range.start && range.start > earliestCreated
+  const start = periodDays && range.start
     ? range.start
-    : earliestCreated || today;
+    : (range && range.start && range.start > earliestCreated
+      ? range.start
+      : earliestCreated || today);
   const end = range && range.end ? range.end : today;
 
   return statsFromRange(
@@ -805,7 +832,7 @@ export function getOverallStats(range) {
     end,
     (dateStr) => {
       const active = items.filter((i) => isItemActiveOn(i, dateStr));
-      if (active.length === 0) return 'skip';
+      if (active.length === 0) return periodDays ? 'miss' : 'skip';
       const day = records[dateStr] || {};
       const doneCnt = active.reduce((n, i) => n + (isRecordDone(day[i.id]) ? 1 : 0), 0);
       return doneCnt === active.length ? 'done' : 'miss';

@@ -59,6 +59,17 @@ function reset() {
   localStorage.clear();
 }
 
+/**
+ * 区间内「已经过去」的天数（首尾都含，末日裁剪到今天）——
+ * 1.1.4 起季度 / 年度分母的独立算法：只裁未来日，不裁项目的在册日。
+ */
+function elapsedDaysIn(startStr, endStr) {
+  const today = fmt(new Date());
+  const to = endStr > today ? today : endStr;
+  if (startStr > to) return 0;
+  return Math.round((Date.parse(`${to}T00:00:00`) - Date.parse(`${startStr}T00:00:00`)) / 86400000) + 1;
+}
+
 /* ==================== 1. 不传 itemId 时行为完全不变 ==================== */
 reset();
 addCheckinItem('晨跑');
@@ -309,12 +320,12 @@ console.log(`OK: 场景I（多项口径按当日已存在项目 + 不统计未�
 // 切到月度 / 季度 / 年度视图时数字纹丝不动，与视图标题自相矛盾。
 reset();
 {
-  // 视图区间的边界先单独钉住（含闰年 2 月与季度末）
-  assert.deepEqual(getViewRange('monthly', 2026, 2), { start: '2026-02-01', end: '2026-02-28' });
-  assert.deepEqual(getViewRange('monthly', 2024, 2), { start: '2024-02-01', end: '2024-02-29' });
-  assert.deepEqual(getViewRange('yearly', 2026), { start: '2026-01-01', end: '2026-12-31' });
-  assert.deepEqual(getViewRange('quarterly', 2026, null, 1), { start: '2026-01-01', end: '2026-03-31' });
-  assert.deepEqual(getViewRange('quarterly', 2026, null, 4), { start: '2026-10-01', end: '2026-12-31' });
+  // 视图区间的边界先单独钉住（含闰年 2 月与季度末），并钉住各自的日基数
+  assert.deepEqual(getViewRange('monthly', 2026, 2), { start: '2026-02-01', end: '2026-02-28', dayBasis: 'active' });
+  assert.deepEqual(getViewRange('monthly', 2024, 2), { start: '2024-02-01', end: '2024-02-29', dayBasis: 'active' });
+  assert.deepEqual(getViewRange('yearly', 2026), { start: '2026-01-01', end: '2026-12-31', dayBasis: 'period' });
+  assert.deepEqual(getViewRange('quarterly', 2026, null, 1), { start: '2026-01-01', end: '2026-03-31', dayBasis: 'period' });
+  assert.deepEqual(getViewRange('quarterly', 2026, null, 4), { start: '2026-10-01', end: '2026-12-31', dayBasis: 'period' });
 }
 
 reset();
@@ -345,19 +356,28 @@ assert.equal(mJ.longestStreak, mJ.totalDays, `月度视图的最长连续不得�
 assert.equal(mJ.currentStreak, mJ.totalDays);
 assert.equal(mJ.firstDone, `${jMonthPrefix}-01`, '首次完成也应落在区间内');
 
-// 季度 / 年度各自算自己那段，且与「在册区间」求交
+// 季度 / 年度各算自己那段：1.1.4 起分母 = 区间已过去的天数，不再与创建日求交
+const later = (a, b) => (a > b ? a : b);
 const qIdx = Math.floor(nowJ.getMonth() / 3) + 1;
 const qRange = getViewRange('quarterly', nowJ.getFullYear(), null, qIdx);
 const qJ = getItemStats(J.id, qRange);
-assert.equal(qJ.totalDays, activeDaysIn(qRange.start, qRange.end, daysAgo(45), ''),
-  `季度分母应为区间内在册的 ${activeDaysIn(qRange.start, qRange.end, daysAgo(45), '')} 天，实际 ${qJ.totalDays}`);
-assert.equal(qJ.longestStreak, qJ.totalDays, '季度区间内的连续不应跨出季度起点');
+assert.equal(qJ.rangeStart, qRange.start, '季度区间起点应为季度首日，不被创建日推迟');
+assert.equal(qJ.totalDays, elapsedDaysIn(qRange.start, qRange.end),
+  `季度分母应为季度已过去的 ${elapsedDaysIn(qRange.start, qRange.end)} 天，实际 ${qJ.totalDays}`);
+assert.equal(qJ.doneDays, elapsedDaysIn(later(qRange.start, daysAgo(45)), qRange.end),
+  '季度分子仍只算真实完成的天数（创建日之前没有记录，就是没完成）');
+assert.equal(qJ.longestStreak, qJ.doneDays, '季度区间内的连续不应跨出季度起点');
 
 const yRange = getViewRange('yearly', nowJ.getFullYear());
 const yJ = getItemStats(J.id, yRange);
-assert.equal(yJ.rangeStart, daysAgo(45), `年度区间应与创建日求交，实际 ${yJ.rangeStart}`);
-assert.equal(yJ.totalDays, activeDaysIn(yRange.start, yRange.end, daysAgo(45), ''));
-assert.equal(yJ.totalDays, 46, '创建日落在本年度内，年度区间应等于全生命周期');
+assert.equal(yJ.rangeStart, yRange.start, `年度区间起点应为 1 月 1 日，实际 ${yJ.rangeStart}`);
+assert.equal(yJ.totalDays, elapsedDaysIn(yRange.start, yRange.end),
+  `年度分母应为全年已过去的 ${elapsedDaysIn(yRange.start, yRange.end)} 天，实际 ${yJ.totalDays}`);
+assert.equal(yJ.doneDays, elapsedDaysIn(later(yRange.start, daysAgo(45)), yRange.end),
+  '年度分子只算真实完成的天数');
+assert.equal(yJ.rate, Math.round((yJ.doneDays / yJ.totalDays) * 100), '年度完成率应随年度分母变小');
+assert.equal(yJ.longestStreak, yJ.doneDays, '连续段由实际完成的日子决定，不因分母变大而变短');
+assert.equal(yJ.currentStreak, yJ.doneDays);
 
 // 查看上个月：连续算到该月末，而不是把今天的实时值搬过来
 const prevMonth = new Date(nowJ.getFullYear(), nowJ.getMonth() - 1, 1);
@@ -448,5 +468,65 @@ assert.equal(getCheckinItems().length, 2, 'reorder 不得把没传入的归档�
 assert.equal(getActiveCheckinItems().length, 1);
 assert.equal(getCheckinItems().find((i) => i.id === KA.id).archived, true, '归档状态应原样保留');
 console.log('OK: 场景K（归档退出界面与当日分母，历史与分母对齐不受损）');
+
+// ==================== 场景L：季度 / 年度的分母按区间总天数（1.1.4 需求 3） ====================
+// 起因：季度 / 年度的分母也要与「在册区间」求交，于是 92 天的第三季度只按项目恰好诞生的
+// 30 天算，用户看到的就是「季度怎么用了月度的天数」。period 基数下只裁未来日，不裁在册日。
+reset();
+{
+  const pastYear = nowJ.getFullYear() - 1; // 整季都在过去，天数与今天无关，可以写死
+  addCheckinItem('秋天项目');
+  const [L] = getCheckinItems();
+  const rawL = JSON.parse(localStorage.getItem('daily_checkin_items'));
+  rawL[0].createdAt = `${pastYear}-09-01`;
+  localStorage.setItem('daily_checkin_items', JSON.stringify(rawL));
+  for (let d = 1; d <= 30; d += 1) {
+    toggleCheckin(`${pastYear}-09-${pad2(d)}`, L.id, true, { time: '07:00', note: '' });
+  }
+
+  // 季度：92 天全部进分母，只有 9 月那 30 天真正完成
+  const lqRange = getViewRange('quarterly', pastYear, null, 3);
+  const lq = getItemStats(L.id, lqRange);
+  assert.equal(lq.totalDays, 92, `上一年第三季度的分母应为季度总天数 92，实际 ${lq.totalDays}`);
+  assert.equal(lq.doneDays, 30, '分子仍只算真实完成的天数');
+  assert.equal(lq.rate, 33, `完成率应按季度总天数算，30/92 应为 33%，实际 ${lq.rate}%`);
+  assert.equal(lq.rangeStart, `${pastYear}-07-01`, '区间起点应为季度首日，不是项目创建日');
+  assert.equal(lq.empty, false);
+  assert.equal(lq.longestStreak, 30, '连续段由实际完成的日子决定，不受分母变大影响');
+
+  // 同一项目看 9 月：月度仍是「在册天数」口径，没被季度的规则带跑
+  const lm = getItemStats(L.id, getViewRange('monthly', pastYear, 9));
+  assert.equal(lm.totalDays, 30, `月度分母应仍是当月在册的 30 天，实际 ${lm.totalDays}`);
+  assert.equal(lm.rate, 100, '月度视图不该因为季度改口径而被诞生前的日子拉低');
+
+  // 8 月：项目还没诞生 → 月度「无可统计」，但它在季度分母里是 31 个没达成的日子
+  const laug = getItemStats(L.id, getViewRange('monthly', pastYear, 8));
+  assert.equal(laug.empty, true, '月度里项目诞生前没有一天在册，应报无可统计');
+  assert.equal(laug.totalDays, 0);
+
+  // 年度：1 月 1 日起就进分母，哪怕项目 9 月才出现
+  const lyRange = getViewRange('yearly', pastYear);
+  const ly = getItemStats(L.id, lyRange);
+  const lYearDays = elapsedDaysIn(lyRange.start, lyRange.end);
+  assert.ok(lYearDays === 365 || lYearDays === 366, `上一年应为整年天数，实际 ${lYearDays}`);
+  assert.equal(ly.totalDays, lYearDays, `年度分母应为全年 ${lYearDays} 天，实际 ${ly.totalDays}`);
+  assert.equal(ly.doneDays, 30);
+
+  // 聚合口径同样按区间总天数，并守住「单项目 total == 聚合 total」这条不变式
+  const lqAll = getOverallStats(lqRange);
+  assert.equal(lqAll.totalDays, 92, '聚合的季度分母也应是 92 天：没有在册项目的日子按没达成算');
+  assert.equal(lqAll.doneDays, 30);
+  assert.equal(lqAll.totalDays, lq.totalDays, '季度口径下单项目与聚合的分母仍要能对齐');
+  // 聚合的月度口径不变：8 月没有任何在册项目，整天不参与
+  const lmAll = getOverallStats(getViewRange('monthly', pastYear, 8));
+  assert.equal(lmAll.empty, true, '聚合的 8 月仍应因为没有在册项目而无可统计');
+
+  // 未来季度：一天都还没过去，按区间总天数也不该凭空长出分母
+  const future = getItemStats(L.id, getViewRange('quarterly', nowJ.getFullYear() + 1, null, 1));
+  assert.equal(future.empty, true, '未来的季度不应有完成率');
+  assert.equal(future.totalDays, 0);
+  assert.equal(future.rate, 0);
+  console.log('OK: 场景L（季度/年度分母=区间已过去的天数，月度仍按在册天数）');
+}
 
 console.log('\n全部验证通过 ✅');

@@ -34,6 +34,15 @@ import {
 const WEEK_HEADERS = ['一', '二', '三', '四', '五', '六', '日'];
 /** 提醒的向前观察窗口（天） */
 const REMINDER_WINDOW = 7;
+/**
+ * 提醒用紫色系：本页绿=打卡、琥珀=待办、蓝=行动各占一个色相，红按既有约定只留给
+ * 「已过期」这个状态语义，所以提醒必须另立一色，否则标题会跟待办撞成同一种颜色。
+ */
+const REMINDER_COLOR = '#bc8cff';
+/** 明天到期：紫色里最亮的一档，在本就偏暗的紫色系里最抓眼 */
+const REMINDER_COLOR_SOON = '#d2a8ff';
+/** 还有几天：同一色相压暗，避免与「明天」抢注意力 */
+const REMINDER_COLOR_LATER = '#a371f7';
 const pad = (n) => String(n).padStart(2, '0');
 
 /** 把 YYYY-MM-DD 显示为 MM-DD */
@@ -81,9 +90,8 @@ const DetailRow = ({ e, todayStr, selectedDate, onToggleCheckin, onToggleTodo, o
           <Typography variant="body2" sx={{ color: done ? '#6e7681' : '#c9d1d9', textDecoration: done ? 'line-through' : 'none', fontSize: '0.85rem' }}>
             {e.item.name}
           </Typography>
-          {e.rec && e.rec.time && (
-            <Typography variant="caption" sx={{ color: '#484f58', fontSize: '0.65rem' }}>完成于 {e.rec.time}</Typography>
-          )}
+          {/* 不显示「完成于 hh:mm」：这行字只在勾上之后出现，会把整行撑高，
+              在月历里点完一个勾，右栏其余条目就跟着往下跳。 */}
         </Box>
         <Chip label="打卡" size="small" sx={{ color: '#8b949e', bgcolor: 'rgba(255,255,255,0.04)', fontSize: '0.65rem', height: 20 }} />
       </Box>
@@ -141,12 +149,15 @@ const DetailRow = ({ e, todayStr, selectedDate, onToggleCheckin, onToggleTodo, o
   );
 };
 
-/** 剩余天数 → 提醒文案与颜色（逾期最紧急，故用状态语义的红色） */
+/**
+ * 剩余天数 → 提醒文案与颜色。
+ * 逾期最紧急，仍用状态语义的红；其余走紫色由亮到暗。今天到期不会走到这里——
+ * 它属于「行动」，storage 的 getUpcomingPhases 已经把它排除出提醒。
+ */
 const reminderUrgency = (daysLeft) => {
   if (daysLeft < 0) return { text: `已逾期 ${-daysLeft} 天`, color: '#f85149' };
-  if (daysLeft === 0) return { text: '今天到期', color: '#f85149' };
-  if (daysLeft === 1) return { text: '明天到期', color: '#d29922' };
-  return { text: `${daysLeft} 天后`, color: '#58a6ff' };
+  if (daysLeft === 1) return { text: '明天到期', color: REMINDER_COLOR_SOON };
+  return { text: `${daysLeft} 天后`, color: REMINDER_COLOR_LATER };
 };
 
 /** 未来一周待完成的行动项：可直接勾选完成，逾期项排在最前 */
@@ -235,9 +246,7 @@ const QuickNotes = ({ dateStr, notes, onAdd, onToggle, onDelete }) => {
             <Typography variant="body2" sx={{ color: n.done ? '#6e7681' : '#c9d1d9', textDecoration: n.done ? 'line-through' : 'none', fontSize: '0.82rem' }}>
               {n.text}
             </Typography>
-            {n.done && n.doneAt && (
-              <Typography variant="caption" sx={{ color: '#484f58', fontSize: '0.65rem', display: 'block' }}>完成于 {n.doneAt}</Typography>
-            )}
+            {/* 同打卡行：勾选后不补「完成于」，避免列表在操作后整体位移 */}
           </Box>
           <IconButton size="small" onClick={() => setPending(n)} sx={{ color: '#484f58', '&:hover': { color: '#f85149' } }}>
             <DeleteOutlineIcon sx={{ fontSize: 16 }} />
@@ -506,14 +515,14 @@ function SchedulePage() {
           <DetailGroup title="待办" color="#d29922" entries={selectedTodos} todayStr={todayStr} selectedDate={selectedDate} onToggleCheckin={onToggleCheckin} onToggleTodo={onToggleTodo} onTogglePhase={onTogglePhase} />
           <DetailGroup title="行动" color="#58a6ff" entries={selectedPhases} todayStr={todayStr} selectedDate={selectedDate} onToggleCheckin={onToggleCheckin} onToggleTodo={onToggleTodo} onTogglePhase={onTogglePhase} />
 
-          {/* 提醒：未来一周待完成的行动项，逾期置顶 */}
+          {/* 提醒：除「今天到期」之外的行动项（已逾期 + 未来一周），逾期置顶 */}
           <Box sx={{ borderTop: '1px solid #30363d', mt: 1, pt: 1.5 }}>
-            {/* 标题不用红色：本页红色专指「已过期」状态，逾期与否已在每条提醒里标出 */}
-            <Typography variant="caption" sx={{ color: '#d29922', fontWeight: 700, fontSize: '0.8rem', display: 'block', mb: 0.3 }}>
+            {/* 紫色与打卡(绿)/待办(琥珀)/行动(蓝)分开；本页红色只留给「已过期」状态 */}
+            <Typography variant="caption" sx={{ color: REMINDER_COLOR, fontWeight: 700, fontSize: '0.8rem', display: 'block', mb: 0.3 }}>
               提醒（{reminders.length}）
             </Typography>
             <Typography variant="caption" sx={{ color: '#484f58', fontSize: '0.7rem', display: 'block', mb: 0.5 }}>
-              未来 {REMINDER_WINDOW} 天内到期的行动项，按紧急度排列
+              今天到期的见上方「行动」；这里是已逾期与未来 {REMINDER_WINDOW} 天内到期的行动项，按紧急度排列
             </Typography>
             {reminders.length === 0 ? (
               <Typography variant="caption" sx={{ color: '#484f58', fontSize: '0.75rem' }}>近一周没有待完成的行动项</Typography>
