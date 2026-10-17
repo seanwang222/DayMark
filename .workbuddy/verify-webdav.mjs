@@ -10,7 +10,7 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
-import { Jianguoyun, resolveLatest, planPull, planPush, backupFileName, pruneBackups, webdavRequest, buildRemoteUrl, encodeWebdavPath, describeAuthFailure, SNAPSHOT_FILENAME, BACKUP_NAME_RE } from '../electron/webdav.js';
+import { Jianguoyun, resolveLatest, planPull, planPush, backupFileName, pruneBackups, webdavRequest, buildRemoteUrl, encodeWebdavPath, describeAuthFailure, APP_PASSWORD_NAME, SNAPSHOT_FILENAME, BACKUP_NAME_RE } from '../electron/webdav.js';
 
 /* ==================== mock 坚果云服务 ==================== */
 
@@ -47,7 +47,7 @@ function startMockServer() {
 
       if (auth !== goodAuth) {
         // 真实服务器在 401 上会带 WWW-Authenticate，用它来区分"地址对不对"与"密码对不对"
-        res.setHeader('WWW-Authenticate', 'Basic realm="Jianguoyun WebDAV"');
+        res.setHeader('WWW-Authenticate', 'Basic realm="nutstore"');
         send(401, { error: 'unauthorized' });
         return;
       }
@@ -230,33 +230,49 @@ async function run() {
     assert.fail('错误密码不应成功');
   } catch (err) {
     assert.match(err.message, /认证失败/, `401 应报认证失败，实际: ${err.message}`);
-    // 诊断三要素：账号（打码）+ 密码形态 + 服务器质询，让用户自己就能看出填错哪一格
+    // 诊断三要素：账号（打码）+ 密码位数 + 服务器质询，让用户自己就能看出填错哪一格
     assert.match(err.message, /u\*\*\*@example\.com/, `401 应给出打码后的账号，实际: ${err.message}`);
-    assert.match(err.message, /5 位，不像坚果云的应用密码/, `短密码应点出"不像应用密码"，实际: ${err.message}`);
-    assert.match(err.message, /realm="Jianguoyun WebDAV"/, `401 应带上服务器质询，实际: ${err.message}`);
+    assert.match(err.message, /密码长度 5 位/, `应如实报出密码位数，实际: ${err.message}`);
+    assert.match(err.message, /固定 16 位/, `位数不对应点出应用密码固定 16 位，实际: ${err.message}`);
+    assert.match(err.message, /没粘贴完整或填成了登录密码/, `应给出可执行的纠正动作，实际: ${err.message}`);
+    assert.match(err.message, /realm="nutstore"/, `401 应带上服务器质询，实际: ${err.message}`);
     assert.ok(!err.message.includes('wrong'), '401 提示绝不能回显密码明文');
   }
 
-  // 3b. 形态正确的 16 位密码仍被拒 → 提示应转向"账号错或应用密码已被删除"
+  // 3b. 长度就是 16 位却被拒 → 不能再说"不像应用密码"，应转向"账号错或应用密码已被删除/失效"
   const shapedClient = new Jianguoyun({ account: USER, password: 'A1b2C3d4E5f6G7h8', dir: 'DayMark', baseUrl });
   try {
     await shapedClient.pull();
     assert.fail('错误密码不应成功');
   } catch (err) {
-    assert.match(err.message, /16 位，符合应用密码格式/, `16 位密码应给出"格式正确"分支的提示，实际: ${err.message}`);
+    assert.match(err.message, /长度 16 位，与.*一致/, `16 位密码应走"长度一致"分支，实际: ${err.message}`);
     assert.match(err.message, /已被删除/, `应提示可能是应用密码被删除，实际: ${err.message}`);
+    assert.ok(!err.message.includes('不像'), '16 位密码绝不该被判定为"不像应用密码"');
     assert.ok(!err.message.includes('A1b2C3d4E5f6G7h8'), '提示绝不能回显 16 位应用密码');
   }
 
-  // 3c. describeAuthFailure 是纯函数：空密码、非默认地址各自成句
+  // 3c. 16 位但含 - _ 等非字母数字字符：应用密码的字符集不限于字母数字，按长度判断（曾误判过）
+  const dashed = describeAuthFailure({ account: USER, password: 'Ab3-5678_901.234' });
+  assert.equal(dashed.includes('固定 16 位'), false, '16 位含特殊字符不能被判成位数不对');
+  assert.match(dashed, /长度 16 位，与.*一致/, `含特殊字符的 16 位密码应判为位数一致，实际: ${dashed}`);
+  assert.ok(!dashed.includes('Ab3-5678_901.234'), '同样不回显密码');
+
+  // 3d. describeAuthFailure 是纯函数：空密码、非默认地址、非邮箱账号各自成句
   const emptyPw = describeAuthFailure({ account: 'a@b.com', password: '', server: 'https://dav.jianguoyun.com/dav/' });
-  assert.match(emptyPw, /密码为空（本机没存到应用密码）/);
+  assert.match(emptyPw, /本机没有存到密码/);
+  assert.match(emptyPw, new RegExp(APP_PASSWORD_NAME.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')), '空密码要给统一称谓');
   assert.match(emptyPw, /地址：默认坚果云/);
   const customServer = describeAuthFailure({ account: 'a@b.com', password: 'x'.repeat(16), server: 'http://192.168.1.9/dav/' });
   assert.match(customServer, /不是默认坚果云地址/);
   const notEmail = describeAuthFailure({ account: 'myname', password: 'y'.repeat(16) });
   assert.match(notEmail, /不是邮箱格式/);
-  console.log('OK: 认证失败（401）正确报错，并给出账号打码 / 密码形态 / 服务器质询的可诊断说明且不回显密码');
+
+  // 3e. 称谓只许一处定义、两处字面量必须一致：渲染层无法 import 本文件
+  const panelSrc = fs.readFileSync(new URL('../src/components/SyncPanel.jsx', import.meta.url), 'utf8');
+  assert.ok(panelSrc.includes(APP_PASSWORD_NAME), `SyncPanel 必须逐字使用统一称谓「${APP_PASSWORD_NAME}」`);
+  const mainSrc = fs.readFileSync(new URL('../electron/main.js', import.meta.url), 'utf8');
+  assert.ok(mainSrc.includes('APP_PASSWORD_NAME'), '主进程的未配置提示应引用同一常量，不要各写一份');
+  console.log('OK: 认证失败（401）正确报错，给出打码账号 / 密码位数 / 服务器质询，称谓与渲染层一致且从不回显密码');
 
   // 4. 文件名错误 → 404 → data null
   const emptyClient = new Jianguoyun({ account: USER, password: PASS, dir: 'NotFoundDir', baseUrl });

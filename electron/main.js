@@ -9,7 +9,7 @@ import { app, BrowserWindow, ipcMain, safeStorage } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { Jianguoyun, SNAPSHOT_FILENAME, planPull, planPush, backupFileName, pruneBackups } from './webdav.js';
+import { Jianguoyun, SNAPSHOT_FILENAME, APP_PASSWORD_NAME, planPull, planPush, backupFileName, pruneBackups } from './webdav.js';
 import { readConfig, writeConfig, mergeConfigInput, hasCloudConfig, publicConfig } from './config.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -238,7 +238,7 @@ function registerIpc() {
 
   ipcMain.handle('daymark:test-connection', async () => {
     const cfg = readCfg();
-    if (!hasCloudConfig(cfg)) return { ok: false, error: '请先填写账号与应用密码' };
+    if (!hasCloudConfig(cfg)) return { ok: false, error: `请先填写账号与${APP_PASSWORD_NAME}` };
     try {
       const client = makeClient(cfg);
       await client.pull();
@@ -250,7 +250,7 @@ function registerIpc() {
 
   ipcMain.handle('daymark:push-now', async (_e, force) => {
     const cfg = readCfg();
-    if (!hasCloudConfig(cfg)) return { ok: false, error: '请先配置 WebDAV 账号与应用密码' };
+    if (!hasCloudConfig(cfg)) return { ok: false, error: `请先配置 WebDAV 账号与${APP_PASSWORD_NAME}` };
     setSyncState({ status: 'syncing', message: '正在上传…' });
     try {
       return await withSyncLock(async () => {
@@ -301,7 +301,7 @@ function registerIpc() {
 
   ipcMain.handle('daymark:pull-now', async (_e, force) => {
     const cfg = readCfg();
-    if (!hasCloudConfig(cfg)) return { ok: false, error: '请先配置 WebDAV 账号与应用密码' };
+    if (!hasCloudConfig(cfg)) return { ok: false, error: `请先配置 WebDAV 账号与${APP_PASSWORD_NAME}` };
     setSyncState({ status: 'syncing', message: '正在下载…' });
     try {
       return await withSyncLock(async () => {

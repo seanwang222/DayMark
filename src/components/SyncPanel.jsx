@@ -86,7 +86,7 @@ function SyncPanel() {
 
   const handleSave = async () => {
     if (!account.trim() || !password.trim() && !passwordSet) {
-      showNotice('error', '请填写 WebDAV 账号与应用密码。');
+      showNotice('error', '请填写账号与用于授权第三方 WebDAV 应用访问的 16 位随机应用密码。');
       return;
     }
     setBusy(true);
@@ -208,10 +208,16 @@ function SyncPanel() {
             type="password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            placeholder={passwordSet ? '已保存（留空保持不变）' : '请输入应用密码（坚果云：官网 → 安全选项 → 添加应用密码）'}
+            placeholder={passwordSet
+              ? '已保存（留空保持不变）'
+              : '请输入用于授权第三方 WebDAV 应用访问的 16 位随机应用密码'}
             fullWidth
             sx={{ mb: 1.5, input: { color: TEXT }, '& .MuiOutlinedInput-root .MuiOutlinedInput-notchedOutline': { borderColor: BORDER }, '& .MuiInputLabel-root': { color: FAINT } }}
           />
+          <Typography variant="caption" sx={{ color: FAINT, display: 'block', mt: -0.5, mb: 1.5, lineHeight: 1.6 }}>
+            这里填的是用于授权第三方 WebDAV 应用访问的 16 位随机应用密码，不是坚果云登录密码。
+            获取路径：坚果云网页 → 头像 → 账户信息 → 安全选项 → 添加应用（如 DayMark）→ 生成后整串粘贴。
+          </Typography>
           <TextField
             size="small"
             label="远程目录（可选）"

@@ -2,7 +2,8 @@
  * 坚果云 WebDAV 同步核心（纯 Node，无 Electron 依赖，可独立回归测试）
  *
  * 协议要点（坚果云 dav.jianguoyun.com/dav/）：
- * - 认证：Authorization: Basic base64(注册邮箱:应用密码)
+ * - 认证：Authorization: Basic base64(注册邮箱:应用密码)，这里的应用密码专指
+ *   用于授权第三方 WebDAV 应用访问的 16 位随机应用密码（不是坚果云登录密码）
  * - MKCOL 创建目录（已存在返回 405/409）
  * - PUT 上传/覆盖文件，GET 下载
  * - 认证失败 401，文件不存在 404
@@ -16,6 +17,12 @@ import path from 'node:path';
 
 const DEFAULT_BASE = 'https://dav.jianguoyun.com/dav/';
 const DEFAULT_DIR = 'DayMark';
+/**
+ * 界面与提示里对这个凭据的统一称谓。渲染层（SyncPanel）无法 import 本文件，
+ * 那边写的是同一串字面量，verify:webdav 用文件比对锁住两者不得漂移。
+ */
+export const APP_PASSWORD_NAME = '用于授权第三方 WebDAV 应用访问的 16 位随机应用密码';
+export const APP_PASSWORD_LENGTH = 16;
 /** 请求超时：没有超时时，网络半开会让界面永远停在「处理中…」 */
 export const REQUEST_TIMEOUT_MS = 20000;
 export const SNAPSHOT_FILENAME = 'daymark-snapshot.json';
@@ -89,7 +96,7 @@ function oneLine(s, max = 80) {
 }
 
 /**
- * 认证失败的可诊断说明（纯函数，绝不回显密码明文，只给形态）
+ * 认证失败的可诊断说明（纯函数，绝不回显密码明文，只给长度形态）
  * @param {{account?:string, password?:string, server?:string, challenge?:string}} info
  */
 export function describeAuthFailure(info = {}) {
@@ -100,12 +107,14 @@ export function describeAuthFailure(info = {}) {
 
   parts.push(`本机使用的账号：${maskAccount(account)}`);
 
+  // 只按长度判断：应用密码固定 16 位，但字符集不限于字母数字，
+  // 拿 /^[A-Za-z0-9]{16}$/ 去卡会把粘对了的用户判成"不像应用密码"（实测踩到）
   if (!password) {
-    parts.push('密码为空（本机没存到应用密码）');
-  } else if (/^[A-Za-z0-9]{16}$/.test(password)) {
-    parts.push('密码 16 位，符合应用密码格式 —— 更可能是账号写错或该应用密码已被删除');
+    parts.push(`本机没有存到密码：请输入${APP_PASSWORD_NAME}（坚果云网页「账户信息 → 安全选项 → 添加应用密码」生成，不是登录密码）`);
+  } else if (password.length === APP_PASSWORD_LENGTH) {
+    parts.push(`密码长度 ${password.length} 位，与${APP_PASSWORD_NAME}一致 —— 仍被拒更可能是账号写错，或这个应用密码已被删除/失效，建议重新生成一个再整串粘贴`);
   } else {
-    parts.push(`密码是 ${password.length} 位，不像坚果云的应用密码（16 位随机字母数字），请去坚果云网页「账户信息 → 安全选项 → 添加应用密码」新建一个并整串粘贴`);
+    parts.push(`密码长度 ${password.length} 位，而${APP_PASSWORD_NAME}固定 ${APP_PASSWORD_LENGTH} 位 —— 多半是没粘贴完整或填成了登录密码，请在坚果云网页「账户信息 → 安全选项 → 添加应用密码」重新生成并整串粘贴`);
   }
 
   const isDefaultBase = server === DEFAULT_BASE;
@@ -125,7 +134,7 @@ export function describeAuthFailure(info = {}) {
  */
 export function describeHttpError(method, status, detail) {
   if (status === 401) {
-    return `${method} 认证失败：请检查 WebDAV 账号与应用密码${detail ? `。${detail}` : ''}`;
+    return `${method} 认证失败：请检查 WebDAV 账号与${APP_PASSWORD_NAME}${detail ? `。${detail}` : ''}`;
   }
   if (status === 403) return `${method} 权限不足：账号无权写入该路径`;
   if (status === 404) return `${method} 404：云端文件/目录不存在`;

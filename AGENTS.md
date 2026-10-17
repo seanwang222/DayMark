@@ -42,7 +42,8 @@ DayMark（React 18 + Vite 4 渲染层，Electron 44 桌面层）的协作约定�
 - 渲染层与主进程只通过 `electron/preload.cjs` 暴露的 `window.daymark` 通信。`beforeunload` 兜底必须走同步通道 `saveSnapshotSync`（`invoke` 是异步的，`beforeunload` 等不到返回）。
 - 同一时刻只允许一个同步任务（`withSyncLock`）。新增同步入口请包在锁里，并考虑「锁被占用时重新排期」而不是丢弃。
 - **读本机快照必须在 `await` 网络之后**（`runSync` / push-now / pull-now 都是这个顺序）。一次同步要「读本地 + 读云端」，先读本地再等云端那 20 秒，等待期间的用户改动就已落盘，拿旧快照去决策会把新数据无备份地盖掉。锁只互斥同步之间，管不到渲染层落盘。
-- 所有 WebDAV 请求带 20 秒超时；错误要经 `describeHttpError` 转成用户能懂的中文提示。401 额外拼上 `describeAuthFailure` 的诊断尾巴（打码账号、**密码位数形态**、是否默认坚果云地址、`WWW-Authenticate` 质询）——「每次都 401」靠这一句才能自证是密码填错还是地址填错；**这里绝不能回显密码明文**，`verify:webdav` 锁住了这条。
+- 所有 WebDAV 请求带 20 秒超时；错误要经 `describeHttpError` 转成用户能懂的中文提示。401 额外拼上 `describeAuthFailure` 的诊断尾巴（打码账号、**密码位数**、是否默认坚果云地址、`WWW-Authenticate` 质询，坚果云真实值是 `realm="nutstore"`）——「每次都 401」靠这一句才能自证是密码填错还是地址填错；**这里绝不能回显密码明文**，`verify:webdav` 锁住了这条。**判断密码只看长度（固定 16 位），不要用 `[A-Za-z0-9]` 之类的字符集正则**：应用密码可以含 `-` `_` 等字符，1.1.3 第一版就是拿「16 位字母数字」去卡，把粘贴对了的用户判成「不像应用密码」，回归用例已锁住这个反例。
+- 这个凭据在界面与提示里的统一称谓是「用于授权第三方 WebDAV 应用访问的 16 位随机应用密码」，唯一定义在 `electron/webdav.js` 的 `APP_PASSWORD_NAME`；主进程引用该常量，渲染层 `SyncPanel.jsx` 因为不能 import 主进程模块而写了一份同名字面量——`verify:webdav` 会读这两个文件断言两者一字不差，改称谓时两处一起改。
 
 ## 3. 构建与依赖约定
 
