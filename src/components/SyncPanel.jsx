@@ -117,7 +117,8 @@ function SyncPanel() {
     setBusy(true);
     setNotice(null);
     const res = await testCloudConnection({ account, password, server, dir });
-    showNotice(res.ok ? 'success' : 'error', res.ok ? '连接成功，认证有效。' : (res.error || '连接失败。'));
+    // 主进程可能返回"连接有效但云端目录还没有数据文件"，那是 ok + notice，不是错误
+    showNotice(res.ok ? 'success' : 'error', res.notice || res.error || (res.ok ? '连接成功，认证有效。' : '连接失败。'));
     setBusy(false);
   };
 

@@ -34,23 +34,23 @@ function b64(str) {
 }
 
 /**
- * 归一化用户填写的远程目录：只认 `/` 分段，所以
- * - 反斜杠（从资源管理器粘的 Windows 路径）换成 `/`
- * - 丢掉开头的「我的坚果云」——WebDAV 的根就是它，多带一层就 409
- * - 去掉首尾斜杠与空白
- * 中文、空格、`#` 原样保留，交给 encodeWebdavPath 逐段编码。
+ * 归一化用户填写的远程目录：反斜杠（从资源管理器粘的 Windows 路径）换成 `/`、
+ * 去掉首尾斜杠与空白、合并空段。
+ *
+ * 这里**刻意不动目录内容本身**：WebDAV 根对应的是网页里的哪一层，各家实现不一样，
+ * 猜着剥掉「我的坚果云」这类前缀会把本来对的配置改错。填错时由 checkConnection()
+ * 逐级 PROPFIND 告诉你云端实际有什么。
  * @param {string} dir
  * @returns {string}
  */
 export function normalizeWebdavDir(dir) {
-  const segs = String(dir == null ? '' : dir)
+  return String(dir == null ? '' : dir)
     .trim()
     .replace(/\\/g, '/')
     .split('/')
     .map((s) => s.trim())
-    .filter((s) => s !== '');
-  while (segs.length && (segs[0] === '我的坚果云' || segs[0] === 'MyJianguoyun')) segs.shift();
-  return segs.join('/');
+    .filter((s) => s !== '')
+    .join('/');
 }
 
 /**
@@ -75,13 +75,66 @@ export function buildRemoteUrl({ baseUrl = DEFAULT_BASE, dir = DEFAULT_DIR, file
   return d ? `${base}${d}/${name}` : `${base}${name}`;
 }
 
+/** href 里可能带百分号编码，坏码不能把整个诊断带崩 */
+function safeDecode(s) {
+  try {
+    return decodeURIComponent(String(s));
+  } catch {
+    return String(s);
+  }
+}
+
+/**
+ * 解析 PROPFIND 的多状态响应（207）。命名空间前缀各家实现写法不同（d: / D: / 无前缀），
+ * 所以按标签名匹配而不是完整前缀。
+ * @param {string} xml
+ * @returns {Array<{href:string, name:string, isDir:boolean}>}
+ */
+export function parseMultistatus(xml) {
+  const chunks = String(xml || '').match(/<(?:[\w-]+:)?response>[\s\S]*?<\/(?:[\w-]+:)?response>/gi) || [];
+  return chunks
+    .map((c) => {
+      const m = c.match(/<(?:[\w-]+:)?href>([^<]*)</i);
+      const href = safeDecode(m ? m[1] : '');
+      const isDir = /<(?:[\w-]+:)?collection\b/i.test(c);
+      const name = href.replace(/\/+$/, '').split('/').filter((s) => s !== '').pop() || '';
+      return { href, name, isDir };
+    })
+    .filter((e) => e.name !== '');
+}
+
+/**
+ * 找出「远程目录」里第一个在云端不存在的层级。
+ * @param {string[]} segments 归一化后的目录段
+ * @param {Array<Array<{name:string}>>} levels levels[i] 是第 i 段所在父目录的子项（levels[0] 为根）
+ * @returns {?{index:number, missing:string, trail:string, available:string[]}}
+ */
+export function diagnoseMissingLevel(segments, levels) {
+  for (let i = 0; i < segments.length; i += 1) {
+    const children = levels[i] || [];
+    const names = children.map((e) => e.name);
+    if (!names.includes(segments[i])) {
+      return {
+        index: i,
+        missing: segments[i],
+        trail: segments.slice(0, i + 1).join('/'),
+        available: names,
+      };
+    }
+  }
+  return null;
+}
+
 /**
  * 执行一次 WebDAV HTTP 请求
+ * @param {{url:string, method?:string, auth:{account:string,password:string}, body?:string, depth?:string, timeoutMs?:number}} opts
  * @returns {Promise<{status:number, body?:string, challenge?:string}>}
  */
-export async function webdavRequest({ url, method = 'GET', auth, body, timeoutMs = REQUEST_TIMEOUT_MS }) {
+export async function webdavRequest({ url, method = 'GET', auth, body, depth, timeoutMs = REQUEST_TIMEOUT_MS }) {
   const headers = { Authorization: `Basic ${b64(`${auth.account}:${auth.password}`)}` };
   if (body !== undefined) headers['Content-Type'] = 'application/json';
+  // PROPFIND 不带 Depth 时不少服务端会拒绝或只回自己
+  if (depth) headers.Depth = depth;
   let res;
   try {
     res = await fetch(url, { method, headers, body, signal: AbortSignal.timeout(timeoutMs) });
@@ -259,11 +312,13 @@ export class Jianguoyun {
   constructor({ account, password, dir = DEFAULT_DIR, fileName = SNAPSHOT_FILENAME, baseUrl = DEFAULT_BASE }) {
     this.auth = { account, password };
     this.baseUrl = baseUrl;
+    this.dir = normalizeWebdavDir(dir);
+    this.fileName = fileName;
     this.url = buildRemoteUrl({ baseUrl, dir, fileName });
-    const base = baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`;
+    this.base = baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`;
     const encodedDir = encodeWebdavPath(dir);
     // 备份文件与主快照同目录，dirUrl 结尾不带斜杠
-    this.dirUrl = encodedDir ? `${base}${encodedDir}` : base.replace(/\/$/, '');
+    this.dirUrl = encodedDir ? `${this.base}${encodedDir}` : this.base.replace(/\/$/, '');
   }
 
   /** 401 时把「本机到底用了什么」拼进错误信息；不含密码明文 */
@@ -282,7 +337,7 @@ export class Jianguoyun {
    */
   pathDetail(res) {
     if (!res || (res.status !== 409 && res.status !== 403)) return '';
-    return `实际请求的路径：${this.url}；「远程目录」要用 / 分段、不带开头的「我的坚果云」（WebDAV 根就是它），反斜杠会被当成文件名的一部分`;
+    return `实际请求的路径：${this.url}；「远程目录」用 / 分段（反斜杠会被当成文件名的一部分），不确定云端叫什么时点「测试连接」，它会列出该层实际存在的目录`;
   }
 
   /** 统一的抛错出口：401 给认证诊断，409/403 给实际路径 */
@@ -293,17 +348,101 @@ export class Jianguoyun {
 
   /** 同目录下的备份文件地址（不新建子目录，免去二次 MKCOL） */
   urlFor(fileName) {
-    return `${this.dirUrl}/${fileName}`;
+    return `${this.dirUrl}/${encodeURIComponent(fileName)}`;
   }
 
   /**
-   * 确保云端目录存在（不存在则逐级创建）
+   * PROPFIND 一个集合的直接子项（Depth:1）。
+   * 集合不存在时返回 null（坚果云对不存在的路径给 404/409，都不当作异常抛出，
+   * 因为调用方是"先看看云端有什么"的诊断路径，不是数据路径）。
+   * @param {string} collectionUrl 以不带斜杠的集合路径给出，内部补 `/`
+   * @returns {Promise<?Array<{name:string, isDir:boolean}>>}
+   */
+  async listChildren(collectionUrl) {
+    const url = collectionUrl.endsWith('/') ? collectionUrl : `${collectionUrl}/`;
+    const res = await webdavRequest({ url, method: 'PROPFIND', auth: this.auth, depth: '1' });
+    if (res.status === 404 || res.status === 409) return null;
+    if (res.status !== 207 && res.status !== 200) throw this.failWith('PROPFIND', res);
+    // Depth:1 的第一条通常是被查询的集合自己，去掉它才是在数子项
+    const selfPath = safeDecode(url.replace(/^https?:\/\/[^/]+/i, '')).replace(/\/+$/, '');
+    return parseMultistatus(res.body).filter((e) => e.href.replace(/\/+$/, '') !== selfPath);
+  }
+
+  /**
+   * 逐级 PROPFIND，定位「远程目录」里第一个云端不存在的层级。
+   * @returns {Promise<{ok:boolean, missing:?object, levels:Array, segments:string[]}>}
+   */
+  async probeDir() {
+    const segments = this.dir ? this.dir.split('/') : [];
+    const levels = [];
+    let url = this.base;
+    for (let i = 0; i < segments.length; i += 1) {
+      const children = await this.listChildren(url);
+      levels.push(children || []);
+      if (!children) break; // 这一层的父目录就不存在，后面不必再问
+      url = `${url}${encodeURIComponent(segments[i])}/`;
+    }
+    return { segments, levels, missing: diagnoseMissingLevel(segments, levels) };
+  }
+
+  /**
+   * 连接自检：GET 一次快照，把各种结果翻译成用户能行动的话。
+   * 坚果云用 409 表示"路径不存在"（不给 404），所以 409 不能直接当错误扔给用户，
+   * 得逐级 PROPFIND 才知道到底哪一层不对、云端那层实际叫什么。
+   * @returns {Promise<{ok:boolean, status:string, notice?:string, error?:string}>}
+   */
+  async checkConnection() {
+    const res = await webdavRequest({ url: this.url, method: 'GET', auth: this.auth });
+    if (res.status >= 200 && res.status < 300) {
+      return { ok: true, status: 'ready', notice: '连接有效，云端已有数据文件。' };
+    }
+    if (res.status !== 404 && res.status !== 409) {
+      return { ok: false, status: 'error', error: this.failWith('GET 下载', res).message };
+    }
+    let probe;
+    try {
+      probe = await this.probeDir();
+    } catch (err) {
+      return { ok: false, status: 'error', error: err.message };
+    }
+    if (probe.missing) {
+      const { trail, available } = probe.missing;
+      const where = probe.missing.index === 0 ? 'WebDAV 根目录下' : `「${probe.segments.slice(0, probe.missing.index).join('/')}」下`;
+      const listed = available.length ? `${available.slice(0, 15).join('、')}${available.length > 15 ? ' …' : ''}` : '（这一层是空的）';
+      return {
+        ok: false,
+        status: 'missing-dir',
+        error: `云端没有「${trail}」这一层（坚果云对不存在的路径回 ${res.status}）。${where}实际有：${listed}。把「远程目录」改成与上面一致的名字即可；你当前填的是「${this.dir}」。`,
+      };
+    }
+    // 目录每一层都在，只是还没有数据文件
+    return {
+      ok: true,
+      status: 'empty-dir',
+      notice: `连接有效，云端目录「${this.dir}」存在但还没有数据文件，点「立即上传」会创建它。`,
+    };
+  }
+
+  /**
+   * 确保云端目录存在：逐级 MKCOL。
+   * 405/405 类"已存在"视为成功；409 在坚果云是**父目录不存在**，所以必须自顶向下建，
+   * 不能对整条路径发一次 MKCOL 再把 409 当成功吞掉（那样后面 PUT 必失败）。
    */
   async ensureDir() {
-    const res = await webdavRequest({ url: this.dirUrl, method: 'MKCOL', auth: this.auth });
-    // 405/409 表示目录已存在，视为成功；401 等其它错误抛出
-    if (res.status === 405 || res.status === 409 || res.status === 201 || res.status === 200) return;
-    throw this.failWith('MKCOL', res);
+    const segments = this.dir ? this.dir.split('/') : [];
+    let url = this.base;
+    for (let i = 0; i < segments.length; i += 1) {
+      url = `${url}${encodeURIComponent(segments[i])}/`;
+      const res = await webdavRequest({ url, method: 'MKCOL', auth: this.auth });
+      if (res.status === 201 || res.status === 200 || res.status === 405) {
+        // 405 = 已存在，继续下一层
+      } else if (res.status === 409) {
+        // 上一层没建出来（权限或并发），直接报清楚断在哪
+        throw new Error(`${describeHttpError('MKCOL', 409)}：建到「${segments.slice(0, i + 1).join('/')}」时失败，请确认上一级目录存在且账号有写权限`);
+      } else {
+        throw this.failWith('MKCOL', res);
+      }
+    }
   }
 
   /**
@@ -337,7 +476,9 @@ export class Jianguoyun {
    */
   async pull() {
     const res = await webdavRequest({ url: this.url, method: 'GET', auth: this.auth });
-    if (res.status === 404) return { status: 404, data: null };
+    // 404 = 目录在、文件还没有；409 = 坚果云用它表示"路径不存在"。
+    // 两者对同步的语义相同：云端没有可比对的数据，按"本机较新"走上传分支。
+    if (res.status === 404 || res.status === 409) return { status: 404, data: null };
     if (res.status < 200 || res.status >= 300) {
       throw this.failWith('GET 下载', res);
     }

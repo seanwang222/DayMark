@@ -239,13 +239,13 @@ function registerIpc() {
   // 测试连接带表单值：过去只读盘上那份，用户改了密码没点保存就测试，被验证的仍是旧密码，
   // 于是"不管输什么都报 401"。这里用 mergeConfigInput 把表单叠到已存配置上（密码留空＝沿用已存），
   // 但绝不落盘 —— 测试不该改写用户的配置。
+  // checkConnection 而不是 pull：坚果云对不存在的路径回 409，需要它逐级 PROPFIND 说清哪一层不对。
   ipcMain.handle('daymark:test-connection', async (_e, input) => {
     const cfg = input ? mergeConfigInput(readCfg(), input) : readCfg();
     if (!hasCloudConfig(cfg)) return { ok: false, error: `请先填写账号与${APP_PASSWORD_NAME}` };
     try {
       const client = makeClient(cfg);
-      await client.pull();
-      return { ok: true };
+      return await client.checkConnection();
     } catch (err) {
       return { ok: false, error: err.message };
     }

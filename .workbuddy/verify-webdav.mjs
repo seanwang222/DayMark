@@ -10,7 +10,7 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
-import { Jianguoyun, resolveLatest, planPull, planPush, backupFileName, pruneBackups, webdavRequest, buildRemoteUrl, encodeWebdavPath, normalizeWebdavDir, describeAuthFailure, APP_PASSWORD_NAME, SNAPSHOT_FILENAME, BACKUP_NAME_RE } from '../electron/webdav.js';
+import { Jianguoyun, resolveLatest, planPull, planPush, backupFileName, pruneBackups, webdavRequest, buildRemoteUrl, encodeWebdavPath, normalizeWebdavDir, parseMultistatus, diagnoseMissingLevel, describeAuthFailure, APP_PASSWORD_NAME, SNAPSHOT_FILENAME, BACKUP_NAME_RE } from '../electron/webdav.js';
 
 /* ==================== mock 坚果云服务 ==================== */
 
@@ -18,9 +18,17 @@ const USER = 'user@example.com';
 const PASS = 'app-password';
 const goodAuth = `Basic ${Buffer.from(`${USER}:${PASS}`).toString('base64')}`;
 
-/** pathname -> 文件内容 */
+/** pathname（保持 URL 编码原样，与真实服务端看到的一致）-> 文件内容 */
 const cloud = new Map();
+/** 已知集合，统一带尾斜杠；根是 /dav/ */
+const dirs = new Set(['/dav/']);
 let mockServer;
+
+/** 取父集合路径（带尾斜杠） */
+function parentOf(pathname) {
+  const t = pathname.replace(/\/+$/, '');
+  return t.slice(0, t.lastIndexOf('/') + 1);
+}
 
 function startMockServer() {
   return new Promise((resolvePromise) => {
@@ -33,15 +41,6 @@ function startMockServer() {
       if (p.startsWith('/dav/Hang/')) {
         req.resume();
         return;
-      }
-
-      // 模拟坚果云对"父目录不存在"的读写返回 409（而不是 404）
-      if (p.startsWith('/dav/Conflict409/')) {
-        if (req.method === 'GET' || req.method === 'PUT') {
-          res.statusCode = 409;
-          res.end();
-          return;
-        }
       }
 
       const send = (code, body) => {
@@ -61,13 +60,35 @@ function startMockServer() {
         return;
       }
 
+      /*
+       * 以下按坚果云的真实语义实现：
+       * - 路径不存在时 GET/PROPFIND 回 409（不是 404），404 只用于"目录在、文件没有"
+       * - MKCOL 只能建在已存在的父目录下，父目录不在回 409
+       */
+      if (req.method === 'PROPFIND') {
+        const col = p.endsWith('/') ? p : `${p}/`;
+        if (!dirs.has(col)) return send(409, { error: 'parent does not exist' });
+        const subDirs = [...dirs].filter((d) => d !== col && parentOf(d) === col).map((d) => ({ h: d, dir: true }));
+        const files = [...cloud.keys()].filter((f) => parentOf(f) === col).map((f) => ({ h: f, dir: false }));
+        const xml = `<?xml version="1.0" encoding="utf-8"?><d:multistatus xmlns:d="DAV:">${[{ h: col, dir: true }, ...subDirs, ...files]
+          .map((e) => `<d:response><d:href>${e.h}</d:href><d:propstat><d:prop><d:resourcetype>${e.dir ? '<d:collection/>' : ''}</d:resourcetype></d:prop></d:propstat></d:response>`)
+          .join('')}</d:multistatus>`;
+        res.statusCode = 207;
+        res.setHeader('Content-Type', 'application/xml');
+        res.end(xml);
+        return;
+      }
+
       if (req.method === 'MKCOL') {
-        if (cloud.has(p)) return send(405, { error: 'already exists' });
-        cloud.set(p, '');
+        const col = p.endsWith('/') ? p : `${p}/`;
+        if (dirs.has(col)) return send(405, { error: 'already exists' });
+        if (!dirs.has(parentOf(col))) return send(409, { error: 'parent does not exist' });
+        dirs.add(col);
         return send(201);
       }
 
       if (req.method === 'PUT') {
+        if (!dirs.has(parentOf(p))) return send(409, { error: 'parent does not exist' });
         let body = '';
         req.on('data', (c) => { body += c; });
         req.on('end', () => {
@@ -78,9 +99,9 @@ function startMockServer() {
       }
 
       if (req.method === 'GET') {
-        if (!cloud.has(p)) return send(404, { error: 'not found' });
-        send(200, cloud.get(p));
-        return;
+        if (cloud.has(p)) return send(200, cloud.get(p));
+        if (!dirs.has(parentOf(p))) return send(409, { error: 'parent does not exist' });
+        return send(404, { error: 'not found' });
       }
 
       send(405, { error: 'method not allowed' });
@@ -292,6 +313,7 @@ async function run() {
 
   // 5. 云端文件为非法 JSON → 拒绝导入防覆盖
   const brokenClient = new Jianguoyun({ account: USER, password: PASS, dir: 'Broken', baseUrl });
+  await brokenClient.ensureDir(); // 真实服务端要求父目录先存在，PUT 才不会被 409 拒掉
   const put = await fetch(`${baseUrl}Broken/${SNAPSHOT_FILENAME}`, {
     method: 'PUT',
     headers: { Authorization: goodAuth, 'Content-Type': 'application/json' },
@@ -341,11 +363,11 @@ async function run() {
   assert.ok(Date.now() - t0 < 5000, `超时应尽快返回，实际耗时 ${Date.now() - t0}ms`);
   console.log('OK: 无响应的服务端请求按超时中断并给出可读错误');
 
-  // 11. 远程目录归一化：用户粘的是资源管理器里的 Windows 路径
+  // 11. 目录归一化只改分隔符写法，不猜云端层级
   assert.equal(
     normalizeWebdavDir('我的坚果云\\0_个人\\0_PersonalDoc\\00000000_DayMark'),
-    '0_个人/0_PersonalDoc/00000000_DayMark',
-    '反斜杠要转成 / 并丢掉「我的坚果云」这一层（WebDAV 根就是它）',
+    '我的坚果云/0_个人/0_PersonalDoc/00000000_DayMark',
+    '反斜杠转成 /，但用户写的层级一律保留——云端到底有哪一层由连接自检去问，不靠猜',
   );
   assert.equal(normalizeWebdavDir('  /DayMark/  '), 'DayMark', '首尾斜杠与空白要丢掉');
   assert.equal(normalizeWebdavDir('A//B/'), 'A/B', '空段要合并');
@@ -356,23 +378,71 @@ async function run() {
       dir: '我的坚果云\\0_个人\\Day Mark#1',
       fileName: SNAPSHOT_FILENAME,
     }),
-    'https://dav.jianguoyun.com/dav/0_%E4%B8%AA%E4%BA%BA/Day%20Mark%231/daymark-snapshot.json',
-    'Windows 路径 + 空格 + # 要拼成合法 URL',
+    'https://dav.jianguoyun.com/dav/%E6%88%91%E7%9A%84%E5%9D%9A%E6%9E%9C%E4%BA%91/0_%E4%B8%AA%E4%BA%BA/Day%20Mark%231/daymark-snapshot.json',
+    '每一段单独编码，空格与 # 不再拼坏地址',
   );
 
-  // 11b. 读写撞上"父目录不存在"的 409：必须把实际请求路径带出来，否则用户看不懂
-  const conflictClient = new Jianguoyun({ account: USER, password: PASS, dir: 'Conflict409/Sub', baseUrl });
-  try {
-    await conflictClient.pull();
-    assert.fail('409 应报错');
-  } catch (err) {
-    assert.match(err.message, /409/, `应报 409，实际: ${err.message}`);
-    assert.match(err.message, /远程目录/, `409 应指向「远程目录」这个排查方向，实际: ${err.message}`);
-    assert.match(err.message, /实际请求的路径：/, `409 应带出实际 URL，实际: ${err.message}`);
-    assert.ok(err.message.includes('Conflict409/Sub'), `应能看到请求的目录，实际: ${err.message}`);
-    assert.ok(!err.message.includes(PASS), '409 提示里不能出现密码');
-  }
-  console.log('OK: 远程目录按 WebDAV 语义归一化，409 带出实际请求路径且不泄露密码');
+  // 11b. 坚果云用 409 表示"路径不存在"：pull 必须归一成"云端为空"，而不是把协议细节甩给用户
+  const ghost = new Jianguoyun({ account: USER, password: PASS, dir: 'NeverCreated/Sub', baseUrl });
+  const ghostRes = await ghost.pull();
+  assert.equal(ghostRes.status, 404, 'GET 撞 409 应视为云端为空');
+  assert.equal(ghostRes.data, null);
+
+  // 11c. ensureDir 逐级 MKCOL：整条路径都不存在时也能建出来（旧实现发一次就放弃）
+  await ghost.ensureDir();
+  await ghost.push(JSON.stringify({ updatedAt: '2026-10-17 00:00:00', items: [], records: {}, todos: [] }));
+  const nowThere = await ghost.pull();
+  assert.equal(nowThere.status, 200, '逐级创建后应能写入并读回');
+  assert.equal(nowThere.data.updatedAt, '2026-10-17 00:00:00');
+
+  // 11d. 纯函数：多状态响应解析与缺失层定位
+  const xml = '<?xml version="1.0"?><d:multistatus xmlns:d="DAV:">'
+    + '<D:response><D:href>/dav/</D:href><D:propstat><D:prop><D:resourcetype><D:collection/></D:resourcetype></D:prop></D:propstat></D:response>'
+    + '<d:response><d:href>/dav/0_%E4%B8%AA%E4%BA%BA/</d:href><d:propstat><d:prop><d:resourcetype><d:collection/></d:resourcetype></d:prop></d:propstat></d:response>'
+    + '<response><href>/dav/zotero</href><propstat><prop><resourcetype/></prop></propstat></response>'
+    + '</d:multistatus>';
+  const listed = parseMultistatus(xml);
+  assert.deepEqual(listed.map((e) => e.name), ['dav', '0_个人', 'zotero'], '命名空间前缀写法不同也要认，href 要解码');
+  assert.equal(listed[1].isDir, true);
+  assert.equal(listed[2].isDir, false);
+  assert.deepEqual(
+    diagnoseMissingLevel(['0_个人', 'DayMark'], [[{ name: '0_个人' }], [{ name: 'Other' }]]),
+    { index: 1, missing: 'DayMark', trail: '0_个人/DayMark', available: ['Other'] },
+    '应指出断在第几层以及那一层实际有什么',
+  );
+  assert.equal(diagnoseMissingLevel(['A'], [[{ name: 'A' }]]), null, '每层都在时没有缺失');
+  assert.deepEqual(parseMultistatus(''), [], '空响应不能崩');
+
+  // 11e. 连接自检：目录断在哪一层就说什么，并列出上一层实际存在的名字
+  await new Jianguoyun({ account: USER, password: PASS, dir: '0_个人/工作笔记', baseUrl }).ensureDir();
+  const probeClient = new Jianguoyun({ account: USER, password: PASS, dir: '0_个人/其实没有这层', baseUrl });
+  const bad = await probeClient.checkConnection();
+  assert.equal(bad.ok, false);
+  assert.equal(bad.status, 'missing-dir');
+  assert.match(bad.error, /云端没有「0_个人\/其实没有这层」这一层/, `应点名缺失的层级，实际: ${bad.error}`);
+  assert.match(bad.error, /「0_个人」下实际有/, `应说明是在哪一层里找，实际: ${bad.error}`);
+  assert.ok(bad.error.includes('工作笔记'), `应列出该层实际存在的目录，好让用户对照改名，实际: ${bad.error}`);
+  assert.ok(!bad.error.includes('DayMark'), '只报缺失层同级的条目，不要把根目录的东西混进来');
+  assert.ok(!bad.error.includes(PASS), '自检提示不含密码');
+
+  // 11e2. 空目录也要说清楚，不能只说"实际有："让人以为程序坏了
+  await new Jianguoyun({ account: USER, password: PASS, dir: 'EmptyBranch', baseUrl }).ensureDir();
+  const badEmpty = await new Jianguoyun({ account: USER, password: PASS, dir: 'EmptyBranch/子层', baseUrl }).checkConnection();
+  assert.equal(badEmpty.status, 'missing-dir');
+  assert.match(badEmpty.error, /（这一层是空的）/, `空目录要有明确说明，实际: ${badEmpty.error}`);
+
+  // 11f. 目录在、数据文件还没有 → 算连通成功，并告诉用户下一步是上传
+  const emptyDirClient = new Jianguoyun({ account: USER, password: PASS, dir: 'DayMark', fileName: 'nothing-here.json', baseUrl });
+  const ed = await emptyDirClient.checkConnection();
+  assert.equal(ed.ok, true, '目录存在但没有数据文件不是错误');
+  assert.equal(ed.status, 'empty-dir');
+  assert.match(ed.notice, /点「立即上传」会创建它/, `应给出下一步，实际: ${ed.notice}`);
+
+  // 11g. 云端已有数据文件 → ready
+  const ready = await new Jianguoyun({ account: USER, password: PASS, dir: 'DayMark', baseUrl }).checkConnection();
+  assert.equal(ready.ok, true);
+  assert.equal(ready.status, 'ready');
+  console.log('OK: 409 按"路径不存在"处理，目录逐级创建，连接自检能点名缺失层并列出实际目录');
 
   mockServer.close();
 

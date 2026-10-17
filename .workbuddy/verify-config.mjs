@@ -69,14 +69,15 @@ try {
   assert.equal(mergeConfigInput(back, { dir: '  A  ' }).dir, 'A');
   assert.equal(mergeConfigInput(back, { account: '  u@e.com  ' }).account, 'u@e.com');
   assert.equal(mergeConfigInput(back, {}).autoSync, false, '未提交 autoSync 即视为关闭');
-  // 用户从资源管理器粘 Windows 路径是常态：反斜杠与「我的坚果云」前缀都要就地消化
+  // 用户从资源管理器粘 Windows 路径是常态：分隔符要纠正，但**层级一律保留**——
+  // 云端到底有没有「我的坚果云」这一层由连接自检去 PROPFIND，不靠保存时猜着删
   assert.equal(
     mergeConfigInput(back, { dir: '我的坚果云\\0_个人\\0_PersonalDoc\\00000000_DayMark' }).dir,
-    '0_个人/0_PersonalDoc/00000000_DayMark',
-    '反斜杠要转成 / 且去掉「我的坚果云」这一层（WebDAV 根就是它）',
+    '我的坚果云/0_个人/0_PersonalDoc/00000000_DayMark',
+    '反斜杠要转成 /，但用户写的每一层都要原样保留',
   );
   assert.equal(mergeConfigInput(back, { dir: '/DayMark/' }).dir, 'DayMark', '首尾斜杠要丢掉');
-  assert.equal(mergeConfigInput(back, { dir: '我的坚果云' }).dir, 'DayMark', '只剩前缀时回落默认目录');
+  assert.equal(mergeConfigInput(back, { dir: 'A//B' }).dir, 'A/B', '空段要合并');
   console.log('OK: 界面输入被 trim、Windows 路径被归一化且非法值回落');
 
   /* ---- 6. syncedAt 不接受界面输入、只由主进程维护 ---- */
