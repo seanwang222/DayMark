@@ -168,7 +168,10 @@ function formatPhases(phases) {
     .map((p) => {
       const label = p.completed ? '已完成' : '未完成';
       const due = p.dueDate ? `@${p.dueDate}` : '';
-      const time = p.completed && p.completedTime ? ` (${p.completedTime})` : '';
+      // 完成标记带上「哪天几点」：只存 HH:mm 的话，导出→恢复会把「逾期后补做」
+      // 变成「按时完成与否未知」，提醒里的取舍跟着翻转
+      const stamp = p.completed ? [p.completedAt, p.completedTime].filter(Boolean).join(' ') : '';
+      const time = stamp ? ` (${stamp})` : '';
       return `[${label}${due}]${p.name}${time}`;
     })
     .join(' | ');
@@ -186,13 +189,23 @@ function parsePhases(str) {
     const dueDate = m[2] || '';
     let rest = m[3].trim();
     let completedTime = '';
+    let completedAt = '';
     const tm = rest.match(/\s\(([^()]*)\)\s*$/);
     if (tm) {
-      completedTime = tm[1].trim();
+      const stamp = tm[1].trim();
+      // 新格式「(YYYY-MM-DD HH:mm)」拆成日期 + 时间；旧备份只有「(HH:mm)」，
+      // 完成日期留空表示确实不知道，绝不能拿导出当天或今天去冒充
+      const dm = stamp.match(/^(\d{4}-\d{2}-\d{2})\s+(.+)$/);
+      if (dm) {
+        completedAt = dm[1];
+        completedTime = dm[2].trim();
+      } else {
+        completedTime = stamp;
+      }
       rest = rest.slice(0, tm.index).trim();
     }
     if (!rest) return;
-    phases.push({ name: rest, completed: m[1] === '已完成', completedTime, dueDate });
+    phases.push({ name: rest, completed: m[1] === '已完成', completedTime, completedAt, dueDate });
   });
   return phases.length > 0 ? phases : undefined;
 }

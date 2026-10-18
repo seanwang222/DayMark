@@ -73,9 +73,15 @@ function daysBetween(a, b) {
  * 未设截止日的行动项无法判定紧急度，不进提醒；所属待办已完成时其行动也不再提醒。
  * 今天到期（daysLeft === 0）同样不进提醒：日程页右栏的「行动」当天已经列出了这些行动，
  * 在同一屏里再抄一遍只会让同一件事占两行，还会把真正需要往前看的项挤出视野。
- * **已完成的行动仍留在列表里**（界面用划掉变灰表达状态）：一勾就消失会把下面的条目
- * 整体推上去，正是这一版要修掉的跳动。为免列表只增不减，已完成且逾期超过 withinDays
- * 天的行动退出提醒——很久以前补做的那几条不该永远钉在顶部。
+ *
+ * 已完成项去不去列表，看的是「什么时候勾的」，不是「勾没勾」：
+ * - **计划完成日当天或之前勾掉的**（按时、提前）→ 留在列表里，由界面划掉变灰，
+ *   作为最近做完了什么的回看；但同样只向前看 withinDays 天，更早的成功不必一直占位。
+ * - **计划完成日之后才勾掉的**（逾期后补做）→ 直接不显示。提醒负责「还没做」，
+ *   一次迟到的补做既不该继续标红「已逾期」，也不该在灰色里长期留痕。
+ * - 完成日期来自 `phase.completedAt`（1.1.4 起由 toggleTodoPhase 写入）。1.1.4 之前
+ *   的数据与旧备份没有它，无法判断是否补做，一律退回上面第一条的窗口规则。
+ *
  * `overdue` 只描述截止日与今天的关系（已完成项也可能曾经逾期），状态一律读 `phase.completed`。
  * @returns {Array<{todo:Object, phase:Object, dueDate:string, daysLeft:number, overdue:boolean}>}
  */
@@ -87,7 +93,10 @@ export function getUpcomingPhases(withinDays = 7, todayStr = getToday()) {
       if (!phase.dueDate) return;
       const daysLeft = daysBetween(todayStr, phase.dueDate);
       if (daysLeft === 0 || daysLeft > withinDays) return;
-      if (phase.completed && daysLeft < -withinDays) return;
+      if (phase.completed) {
+        if (phase.completedAt && String(phase.completedAt) > String(phase.dueDate)) return;
+        if (daysLeft < -withinDays) return;
+      }
       out.push({ todo, phase, dueDate: phase.dueDate, daysLeft, overdue: daysLeft < 0 });
     });
   });
@@ -959,6 +968,7 @@ export function addTodo(todoData) {
       name: p.name.trim(),
       completed: p.completed || false,
       completedTime: p.completedTime || '',
+      completedAt: p.completedAt || '',
       dueDate: p.dueDate || '',
     })) : undefined,
   };
@@ -989,6 +999,7 @@ export function editTodo(id, updates) {
             name: p.name.trim(),
             completed: p.completed || false,
             completedTime: p.completedTime || '',
+            completedAt: p.completedAt || '',
             dueDate: p.dueDate || '',
           }))
         : undefined;
@@ -1077,6 +1088,9 @@ export function toggleTodoPhase(todoId, phaseId) {
   if (!phase) return todos;
   phase.completed = !phase.completed;
   phase.completedTime = phase.completed ? getNowTime() : '';
+  // 提醒要分得清「按时完成」与「逾期后补做」，光有 HH:mm 不够，必须记下勾掉的那一天。
+  // 取消完成一律归零（不是 delete）：这个字段本来就总写，留空即「不知道完成于哪天」。
+  phase.completedAt = phase.completed ? getToday() : '';
   safeWrite(STORAGE_KEYS.TODOS, todos);
   return todos;
 }
@@ -1133,6 +1147,11 @@ function normalizeTodo(t) {
           name: String(p.name).trim(),
           completed: !!p.completed,
           completedTime: p.completedTime || '',
+          // 1.1.4 起行动项记「完成于哪天」，用于区分按时完成与逾期补做；
+          // 老数据与旧备份没有这个字段 → 归一为 ''，由调用方按「不知道」处理
+          completedAt: /^\d{4}-\d{2}-\d{2}$/.test(String(p.completedAt || '').slice(0, 10))
+            ? String(p.completedAt).slice(0, 10)
+            : '',
           dueDate: p.dueDate || '',
         }))
     : undefined;

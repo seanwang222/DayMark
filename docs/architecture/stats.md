@@ -6,31 +6,31 @@
 
 ## 口径的三条排除规则
 
-`getMonthlyData(year, month, itemId)`（`storage.js:493`）逐日生成 `{ date, completed, total, rate, excluded? }`：
+`getMonthlyData(year, month, itemId)`（`storage.js:502`）逐日生成 `{ date, completed, total, rate, excluded? }`：
 
 ```mermaid
 flowchart TD
   A[某天 dateStr] --> B{单项目模式且<br/>dateStr < 项目创建日?}
   B -- 是 --> E1["excluded: true<br/>total=completed=rate=0"]
-  B -- 否 --> C["active = 当天在册的项目<br/>isItemActiveOn(i, dateStr)（:493 起循环内）"]
+  B -- 否 --> C["active = 当天在册的项目<br/>isItemActiveOn(i, dateStr)（:502 起循环内）"]
   C --> D{total 为 0<br/>或 dateStr > today?}
   D -- 是 --> E2["excluded: true<br/>total=completed=rate=0"]
   D -- 否 --> F[正常计入：completed / total]
 ```
 
-1. **分母只算「当天在册的打卡项」**：判定收敛在唯一入口 `isItemActiveOn(item, dateStr)`（`storage.js:126`）——`createdAt ≤ 当天`。晚建的项目不配在诞生前被记为「未完成」。
+1. **分母只算「当天在册的打卡项」**：判定收敛在唯一入口 `isItemActiveOn(item, dateStr)`（`storage.js:135`）——`createdAt ≤ 当天`。晚建的项目不配在诞生前被记为「未完成」。
 2. **归档日及以后同样不在册**：同一函数里 `archived` 为真时要求 `当天 < archivedAt`，即项目的在册区间是「创建日 → 归档日前一天」。归档当天起它不再进入任何分母，也不会把往年月份的数字追溯改写。已归档但没有归档日期（外来的脏数据）按「全程不在册」处理，宁可少算也不凭空拉低完成率。
 3. **未到来的日子不参与统计**：`dateStr > today` 同样标 `excluded`。
 
-三条规则同时被 `getCheckinStats`（`storage.js:464`，逐日分母）、`getMonthlyData`（在册判定在 `:522`）、`getOverallStats`、`getItemStats` 与 `CheckinCalendar` 消费。**不要在任何现场重写这套比较**，新需求请扩 `isItemActiveOn`。热力图与「当日完成 x/y」始终按这三条走；只有统计卡的季度 / 年度视图按下面的 `dayBasis:'period'` 跳过第 1、2 条（见「统计卡只算所选区间」）。
+三条规则同时被 `getCheckinStats`（`storage.js:473`，逐日分母）、`getMonthlyData`（在册判定在 `:531`）、`getOverallStats`、`getItemStats` 与 `CheckinCalendar` 消费。**不要在任何现场重写这套比较**，新需求请扩 `isItemActiveOn`。热力图与「当日完成 x/y」始终按这三条走；只有统计卡的季度 / 年度视图按下面的 `dayBasis:'period'` 跳过第 1、2 条（见「统计卡只算所选区间」）。
 
-`excluded` 靠「加 0」生效：季/年视图**不重新判口径**，而是从月数据汇总——`getQuarterlyData`（`:554`）在 `:562` 调 `getMonthlyData`，`getYearlyData`（`:587`）在 `:593` 调用，各自 `reduce` 出月 `completed/total/rate` 与 `avgRate`。调用点在 `src/pages/CheckinPage.jsx` 的 `useMemo`。因为 `excluded` 那天的 `total` 与 `completed` 都是 0，聚合时「加 0」天然无贡献，**没人需要显式过滤 `excluded`**。跨年也不特殊：季度循环的月份恒在同一 `year`，跨年只发生在界面导航。
+`excluded` 靠「加 0」生效：季/年视图**不重新判口径**，而是从月数据汇总——`getQuarterlyData`（`:563`）在 `:571` 调 `getMonthlyData`，`getYearlyData`（`:596`）在 `:602` 调用，各自 `reduce` 出月 `completed/total/rate` 与 `avgRate`。调用点在 `src/pages/CheckinPage.jsx` 的 `useMemo`。因为 `excluded` 那天的 `total` 与 `completed` 都是 0，聚合时「加 0」天然无贡献，**没人需要显式过滤 `excluded`**。跨年也不特殊：季度循环的月份恒在同一 `year`，跨年只发生在界面导航。
 
 ## 统计卡只算所选区间
 
-`getViewRange(view, year, month, quarter)`（`storage.js:635`）把「月度 / 季度 / 年度」翻译成一个闭区间 `{ start, end, dayBasis }`（月末按真实天数，闰年 2 月为 `02-29`）。界面拿它去调 `getItemStats(itemId, range)`（`:769`）与 `getOverallStats(range)`（`:812`）；不传 range 即全生命周期（创建日 → 今天），1.x 的老调用点行为不变。
+`getViewRange(view, year, month, quarter)`（`storage.js:644`）把「月度 / 季度 / 年度」翻译成一个闭区间 `{ start, end, dayBasis }`（月末按真实天数，闰年 2 月为 `02-29`）。界面拿它去调 `getItemStats(itemId, range)`（`:778`）与 `getOverallStats(range)`（`:821`）；不传 range 即全生命周期（创建日 → 今天），1.x 的老调用点行为不变。
 
-两者都汇入同一个实现 `statsFromRange(start, end, classify, meta)`（`:665`）——**全应用唯一的汇总统计出口**：
+两者都汇入同一个实现 `statsFromRange(start, end, classify, meta)`（`:674`）——**全应用唯一的汇总统计出口**：
 
 - `end` 一律裁剪到今天；`start > end`（区间整体在未来）直接返回 `empty: true`，四个指标全 0，界面显示「—」而不是「0%」。
 - `classify(dateStr)` 返回 `done | miss | skip`。`skip`（不在册）的那天**既不进分母也不打断连续段**，所以「全部项目」里某天没有任何在册项目不会把连续切断。
@@ -59,15 +59,15 @@ npm run verify:stats
 
 ## 连续天数：不能用循环结束时的 `running`
 
-`statsFromRange`（`storage.js:665`）里的当前连续判定（`:731-732`）：
+`statsFromRange`（`storage.js:674`）里的当前连续判定（`:740-741`）：
 
 ```
 streakEnd === end || streakEnd === formatDate(prevDay) ? streakEndRun : 0
 ```
 
-`end` 是**裁剪到今天的区间末**，`prevDay` 是它的前一天。配套变量 `streakEnd` / `streakEndRun` 在 `:704` 声明、`:717-718` 与命中日同步更新。
+`end` 是**裁剪到今天的区间末**，`prevDay` 是它的前一天。配套变量 `streakEnd` / `streakEndRun` 在 `:713` 声明、`:726-727` 与命中日同步更新。
 
-`:702-703` 的注释解释了为什么不能用循环结束时的 `running`：**区间末当天还没打卡时 `running` 已经被重置为 0**，而「当天未打卡但前一天连着」按产品语义不算中断。这条语义由 `verify-stats` 的场景 C（今天未打卡、昨天连着）与场景 A（连续段已断在两天前）、场景 G（聚合口径）、场景 J（连续段按区间截断）锁住。
+`:711-712` 的注释解释了为什么不能用循环结束时的 `running`：**区间末当天还没打卡时 `running` 已经被重置为 0**，而「当天未打卡但前一天连着」按产品语义不算中断。这条语义由 `verify-stats` 的场景 C（今天未打卡、昨天连着）与场景 A（连续段已断在两天前）、场景 G（聚合口径）、场景 J（连续段按区间截断）锁住。
 
 区间截断是 1.1.2 起的行为：月度视图的最长连续不会超过当月在册天数；查看历史月份时，「当前连续」表示**截至该区间末尾**的连续段，而不是把今天的实时值搬过去。统计卡下方会跟着显示 `统计区间：起 ~ 止`，让数字的口径写在脸上。`period` 基数（季度 / 年度）只放大分母，不动分子：项目 9-01 创建、之后天天达成，看上一年仍是「连续 30 / 分母 365」。
 
@@ -77,46 +77,56 @@ streakEnd === end || streakEnd === formatDate(prevDay) ? streakEndRun : 0
 
 | 落点 | 位置 | 漏掉的后果 |
 |---|---|---|
-| 界面取数 | `getActiveCheckinItems()`（`storage.js:313`）/ `getActiveTodos()`（`:896`） | 页面仍用 `getCheckinItems()` / `getTodos()` → 归档项照常显示 |
-| 备份重建 | `normalizeTodo()`（`:1104`）与 `setAllData()`（`:1310`）的打卡项重建都是**白名单** | 归档状态在「导出 → 恢复」后被抹掉，归档项自己冒回界面 |
+| 界面取数 | `getActiveCheckinItems()`（`storage.js:322`）/ `getActiveTodos()`（`:905`） | 页面仍用 `getCheckinItems()` / `getTodos()` → 归档项照常显示 |
+| 备份重建 | `normalizeTodo()`（`:1118`）与 `setAllData()`（`:1329`）的打卡项重建都是**白名单** | 归档状态在「导出 → 恢复」后被抹掉，归档项自己冒回界面 |
 | CSV 区块 | `src/utils/backup.js` 的 `ITEM_HEADERS` / `TODO_HEADERS` 与对应解析 | 只导出不解析，恢复时同样丢；旧备份缺列要能安全回落为未归档 |
 
 另有两处反面教材式的路径，改动时请一并检查：
 
-- `reorderCheckinItems()`（`:401`）与 `reorderTodos()`（`:1047`）：界面只会传「可见项」的 id，**不能**拿传入列表当整组数据写回，否则一次拖拽就把归档项从存储里抹掉。两个函数现在都是「先按传入顺序排，再把没点到的按原顺序追加」。
-- 归档 / 取消归档（`:329` / `:340` / `:912` / `:923`）：取消归档时是 `delete` 掉两个字段，而不是写 `false` / `''`。这样恢复后的项目与「从未归档过」逐字节等价，不会再被任何 `archived` 分支绊到。
+- `reorderCheckinItems()`（`:410`）与 `reorderTodos()`（`:1058`）：界面只会传「可见项」的 id，**不能**拿传入列表当整组数据写回，否则一次拖拽就把归档项从存储里抹掉。两个函数现在都是「先按传入顺序排，再把没点到的按原顺序追加」。
+- 归档 / 取消归档（`:338` / `:349` / `:921` / `:932`）：取消归档时是 `delete` 掉两个字段，而不是写 `false` / `''`。这样恢复后的项目与「从未归档过」逐字节等价，不会再被任何 `archived` 分支绊到。
 
-概览与归档清单的数据源在 `src/utils/backup.js`：`getDataOverview()`（`:537`）的 `itemCount` / `todoCount` 只数未归档（界面看得见的那部分），归档量走 `archivedItemCount` / `archivedRecordCount` / `archivedTodoCount` 三个独立字段；`getArchiveInventory()`（`:599`）为「数据管理 → 归档」提供带历史条数的清单，`groupArchiveByMonth()`（`:645`）是按月分组的唯一实现。
+概览与归档清单的数据源在 `src/utils/backup.js`：`getDataOverview()`（`:550`）的 `itemCount` / `todoCount` 只数未归档（界面看得见的那部分），归档量走 `archivedItemCount` / `archivedRecordCount` / `archivedTodoCount` 三个独立字段；`getArchiveInventory()`（`:612`）为「数据管理 → 归档」提供带历史条数的清单，`groupArchiveByMonth()`（`:658`）是按月分组的唯一实现。
 
 ## 「已过期」只有一个判定
 
-`isPastDue(completed, dueDate, todayStr)`（`storage.js:103-105`）：
+`isPastDue(completed, dueDate, todayStr)`（`storage.js:112-114`）：
 
 ```js
 !completed && !!dueDate && String(dueDate) < String(todayStr)
 ```
 
-**`!!dueDate` 不能省。** `:99-101` 给了理由：`YYYY-MM-DD` 字符串比较里，空串小于任何日期，直接写 `dueDate < todayStr` 会把**所有没有截止日的待办**标成过期。别在现场重写这套比较。
+**`!!dueDate` 不能省。** `:106-108` 给了理由：`YYYY-MM-DD` 字符串比较里，空串小于任何日期，直接写 `dueDate < todayStr` 会把**所有没有截止日的待办**标成过期。别在现场重写这套比较。
 
-## 提醒列表：一个排序键
+## 提醒列表：一个排序键，两条完成项退场规则
 
-`getUpcomingPhases(withinDays = 7, todayStr = getToday())`（`storage.js:82-95`）：
+`getUpcomingPhases(withinDays = 7, todayStr = getToday())`（`storage.js:88-105`）：
 
-- 只遍历 `getActiveTodos()`（`:84`），归档待办连同它的行动一起退出提醒；
-- 剔除已完成待办（`:85`）、无截止日的行动（`:87`）、**今天到期与超出窗口的**（`:89`）；
-- 已完成的行动**不过滤**，只有「已完成且逾期超过 withinDays 天」才退出（`:90`）；
-- `daysLeft = daysBetween(todayStr, dueDate)`（`:88`），**逾期为负数**；
-- 比较器只有一处：`:94` 的 `a.daysLeft - b.daysLeft || title.localeCompare(title)`。逾期自然置顶，不需要单独的「逾期分组」。
+- 只遍历 `getActiveTodos()`（`:90`），归档待办连同它的行动一起退出提醒；
+- 剔除已完成待办（`:91`）与无截止日的行动（`:93`）——**但不剔除已完成的行动**；
+- 剔除今天到期与超出向前窗口的（`:95`）；已完成的两条退场判定在 `:97`（补做）与 `:98`（回看窗）；
+- `daysLeft = daysBetween(todayStr, dueDate)`（`:94`），**逾期为负数**；
+- 比较器只有一处：`:103` 的 `a.daysLeft - b.daysLeft || title.localeCompare(title)`。逾期自然置顶，不需要单独的「逾期分组」，也不给完成项单独排位——把完成项"沉底"会让刚勾掉的那一行跳到别处。
 
 1.1.4 起 `daysLeft === 0` 不进提醒：日程页右栏的「行动」分组本来就按选中日列出当天到期的行动，选中「今天」时两者完全重合，同屏再抄一遍只会把真正要往前看的项挤出视野。数据本身没有任何变化——那些行动仍然挂在同一个 `phase.dueDate` 上，只是换了展示位置，所以「提醒（N）」的计数会相应减少。
 
-**完成状态不进过滤器**：勾掉一条提醒里的行动，它必须**留在原来的位置**，由界面画成与其他分区一致的完成态（标题划线 + 变灰、勾选框变绿）。一勾就把它从列表里筛掉，下面的条目会整体上一格——正是本版在别处（打卡行、临时任务行）刚修掉的那类跳动。排序键仍只有一个：把完成项"沉底"或"置顶"都会让刚勾掉的那一行跳到别处，同理不要做。代价是列表只进不出，所以补做过久的那一档要有出口：**已完成且 `daysLeft < -withinDays` 的行动退出提醒**（逾期 8 天以上才做完的历史项不再占位；未完成的逾期行动无论多久都仍然提醒）。`overdue` 字段只描述截止日与今天的关系（已完成项也可能为 `true`），界面对完成项一律用灰色、不再标红。
+**已完成项的去留取决于「哪天勾的」，不是「勾没勾」**。要分得开就必须有完成日期，所以 `toggleTodoPhase`（`storage.js:1083`）在 `completedTime`（HH:mm，界面显示用）之外还写 **`phase.completedAt`（YYYY-MM-DD，判定用）**，取消完成时两者一起归零：
 
-改窗口、改排序、改「谁进提醒」都去扩 `verify:todo` 第 6 组（今天到期被排除、明天仍在窗口内、勾掉的仍在原位、逾期很久的完成项才退出；归档排除锁在第 7 组），不要在页面里另写一套。
+| 情况 | 判定 | 结果 |
+|---|---|---|
+| 按时 / 提前勾掉 | `completedAt ≤ dueDate` | 留在列表里划掉变灰；仍受向前 `withinDays` 天的回看窗约束（`:98`） |
+| 逾期之后才补做 | `completedAt > dueDate` | **直接不显示**（`:97`）——提醒负责「还没做」，一次迟到的补做既不该继续标红，也不该在灰色里长期占位 |
+| 老数据 / 旧备份 | 没有 `completedAt` | 判不出是否补做，退回上一行的窗口规则；既不当成补做抹掉，也不拿今天或导出当天冒充 |
+
+界面侧 `ReminderRow`（`SchedulePage.jsx:168`）读 `phase.completed` 画完成态：按时勾掉的那行**位置、行高、条数都不变**，与其他分区的完成效果一致（标题划线 + 变灰、勾选框变绿）；只有逾期补做的会整行退出，这是本人明确要求的例外，别顺手把按时的也删掉。`overdue` 字段只描述截止日与今天的关系（已完成项也可能为 `true`），界面对完成项一律用灰色、不再标红。
+
+这个字段要活着走完四处白名单：`addTodo`、`editTodo`、`normalizeTodo`（`:1118`，非法值归零）与 `AddTodoDialog` 提交时的原值回传——对话框不显示它，漏传一次就把「补做」洗成「按时」，所以 `verify:todo` 第 9 组按 `verify:config` 的做法用源码断言锁住这条接线。CSV 侧 `formatPhases` / `parsePhases`（`backup.js:165` / `:180`）把它编进阶段串 `[已完成@截止日]名称 (完成日期 完成时刻)`，旧备份只有 `(HH:mm)` 时读回空日期。
+
+改窗口、改排序、改「谁进提醒 / 完成项怎么取舍」都去扩 `verify:todo` 第 6 组与第 9 组（今天到期被排除、按时完成的留原位、补做的退出、老数据退回窗口规则、完成日期随勾选写入并随取消清零；归档排除锁在第 7 组，CSV 日期往返锁在 `verify:backup` 第 12 组），不要在页面里另写一套。
 
 ## 日期一律是本地日
 
-`getToday()`（`:54-60`）、`formatDate()`（`:142-148`）都用 `getFullYear/getMonth/getDate`，**没有 UTC 换算**；`daysBetween` 把 `${date}T00:00:00` 当本地零点解析（`:63-68`）。口径全部建立在「同一台机器的本地日」上，跨时区设备之间的比较不在设计范围内。
+`getToday()`（`:54-60`）、`formatDate()`（`:151-157`）都用 `getFullYear/getMonth/getDate`，**没有 UTC 换算**；`daysBetween` 把 `${date}T00:00:00` 当本地零点解析（`:63-68`）。口径全部建立在「同一台机器的本地日」上，跨时区设备之间的比较不在设计范围内。
 
 ## 两套颜色，不许混
 

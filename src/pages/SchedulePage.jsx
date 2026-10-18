@@ -532,7 +532,7 @@ function SchedulePage() {
               提醒（{reminders.length}）
             </Typography>
             <Typography variant="caption" sx={{ color: '#484f58', fontSize: '0.7rem', display: 'block', mb: 0.5 }}>
-              今天到期的见上方「行动」；这里是已逾期与未来 {REMINDER_WINDOW} 天内到期的行动项，勾掉后划掉变灰留在原地
+              今天到期的见上方「行动」；这里列已逾期与未来 {REMINDER_WINDOW} 天内的行动项，按时勾掉的划掉变灰留在原地，逾期后才补做的不再显示
             </Typography>
             {reminders.length === 0 ? (
               <Typography variant="caption" sx={{ color: '#484f58', fontSize: '0.75rem' }}>近一周没有到期的行动项</Typography>

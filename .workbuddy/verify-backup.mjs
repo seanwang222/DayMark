@@ -68,6 +68,9 @@ function todosComparable(todos) {
         name: p.name,
         completed: p.completed,
         completedTime: p.completed ? p.completedTime : '',
+        // 完成日期决定「按时做完」还是「逾期补做」，导出→恢复丢了它，
+        // 一条本该退出提醒的补做就会重新变成灰色的按时完成
+        completedAt: p.completed ? (p.completedAt || '') : '',
       })),
     }));
 }
@@ -428,5 +431,39 @@ assert.ok(
 );
 assert.deepEqual(backup.groupArchiveByMonth({ items: [], todos: [] }), [], '无归档时分组为空');
 console.log('OK: 归档按月分组正确 —— 月份倒序、同月合并两类数据、缺归档日期的归到末尾且条目不丢');
+
+/* ---- 12. 行动项的完成日期：CSV 带「哪天勾的」往返，旧格式只有 HH:mm 时归为不知道 ---- */
+{
+  localStorage.clear();
+  addTodo({ title: '有补做的待办', description: {}, priority: 'urgent_important', phases: [
+    { name: '按时做完', dueDate: '2026-09-10', completed: true, completedTime: '09:00', completedAt: '2026-09-10' },
+    { name: '逾期补做', dueDate: '2026-09-12', completed: true, completedTime: '10:00', completedAt: '2026-09-20' },
+    { name: '还没做', dueDate: '2026-09-25' },
+  ] });
+
+  const csv = backup.buildAllCSV();
+  assert.ok(csv.includes('[已完成@2026-09-12]逾期补做 (2026-09-20 10:00)'),
+    `阶段应带完成日期导出，实际: ${(csv.match(/\[[^\]]*\]逾期补做[^\n,]*/)||[''])[0]}`);
+
+  localStorage.clear();
+  backup.restoreData(backup.parseBackupCSV(csv), 'replace');
+  const t = getTodos()[0];
+  assert.equal(t.phases.find((p) => p.name === '按时做完').completedAt, '2026-09-10', 'CSV 往返必须保住完成日期');
+  assert.equal(t.phases.find((p) => p.name === '按时做完').completedTime, '09:00', '完成时刻仍应是 HH:mm');
+  assert.equal(t.phases.find((p) => p.name === '逾期补做').completedAt, '2026-09-20',
+    '补做的完成日期同样要保住，丢了它这条就会在提醒里伪装成按时完成');
+  assert.equal(t.phases.find((p) => p.name === '还没做').completedAt, '', '未完成的行动没有完成日期');
+
+  // 1.1.4 之前的备份只有「(HH:mm)」：日期留空表示确实不知道，绝不拿导出当天或今天冒充
+  const legacy = csv.replace('(2026-09-20 10:00)', '(10:00)');
+  assert.ok(legacy !== csv, '本条用例需要真的构造出旧格式的阶段串');
+  localStorage.clear();
+  backup.restoreData(backup.parseBackupCSV(legacy), 'replace');
+  const lt = getTodos()[0];
+  assert.equal(lt.phases.find((p) => p.name === '逾期补做').completedAt, '', '旧备份读不出完成日期应留空');
+  assert.equal(lt.phases.find((p) => p.name === '逾期补做').completedTime, '10:00', '旧格式的时刻仍要原样读回');
+  assert.equal(lt.phases.find((p) => p.name === '逾期补做').completed, true, '旧格式不应影响完成状态本身');
+  console.log('OK: 行动项完成日期随 CSV 往返，旧格式安全回落为「不知道哪天」');
+}
 
 console.log('\n全部验证通过 ✅');
