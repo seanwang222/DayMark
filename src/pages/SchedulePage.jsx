@@ -160,27 +160,37 @@ const reminderUrgency = (daysLeft) => {
   return { text: `${daysLeft} 天后`, color: REMINDER_COLOR_LATER };
 };
 
-/** 未来一周待完成的行动项：可直接勾选完成，逾期项排在最前 */
+/**
+ * 提醒里的一条行动项：可直接勾选完成。
+ * 勾完不消失，改成与其他分区一致的「划掉 + 变灰」，行高与位置都不变；
+ * 已完成不再标红「已逾期」——本页的红色只留给仍然活着的逾期状态。
+ */
 const ReminderRow = ({ item, onTogglePhase }) => {
   const { todo, phase, dueDate, daysLeft } = item;
+  const done = !!phase.completed;
   const urgency = reminderUrgency(daysLeft);
+  const tone = done ? '#6e7681' : urgency.color;
   const cfg = TODO_PRIORITIES[todo.priority] || TODO_PRIORITIES.not_urgent_important;
   return (
     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, py: 0.5 }}>
       <Checkbox
-        checked={false}
+        checked={done}
         onChange={() => onTogglePhase(todo.id, phase.id)}
         size="small"
-        sx={{ color: '#484f58', '&:hover': { color: '#3fb950' }, p: 0.3 }}
+        sx={{ color: '#484f58', '&.Mui-checked': { color: '#3fb950' }, '&:hover': { color: '#3fb950' }, p: 0.3 }}
       />
       <Box sx={{ flex: 1, minWidth: 0 }}>
-        <Typography variant="body2" sx={{ color: '#c9d1d9', fontSize: '0.82rem' }}>
+        <Typography
+          variant="body2"
+          sx={{ color: done ? '#6e7681' : '#c9d1d9', textDecoration: done ? 'line-through' : 'none', fontSize: '0.82rem' }}
+        >
           {todo.title} <span style={{ color: '#6e7681' }}>›</span> {phase.name}
         </Typography>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.2, mt: 0.1 }}>
-          <EventIcon sx={{ fontSize: 12, color: urgency.color }} />
-          <Typography variant="caption" sx={{ color: urgency.color, fontSize: '0.65rem' }}>
-            截止 {fmtMd(dueDate)} · {urgency.text}
+          <EventIcon sx={{ fontSize: 12, color: tone }} />
+          <Typography variant="caption" sx={{ color: tone, fontSize: '0.65rem' }}>
+            截止 {fmtMd(dueDate)}
+            {done ? '' : ` · ${urgency.text}`}
           </Typography>
         </Box>
       </Box>
@@ -515,17 +525,17 @@ function SchedulePage() {
           <DetailGroup title="待办" color="#d29922" entries={selectedTodos} todayStr={todayStr} selectedDate={selectedDate} onToggleCheckin={onToggleCheckin} onToggleTodo={onToggleTodo} onTogglePhase={onTogglePhase} />
           <DetailGroup title="行动" color="#58a6ff" entries={selectedPhases} todayStr={todayStr} selectedDate={selectedDate} onToggleCheckin={onToggleCheckin} onToggleTodo={onToggleTodo} onTogglePhase={onTogglePhase} />
 
-          {/* 提醒：除「今天到期」之外的行动项（已逾期 + 未来一周），逾期置顶 */}
+          {/* 提醒：除「今天到期」之外的行动项（已逾期 + 未来一周），逾期置顶，完成的留在原地 */}
           <Box sx={{ borderTop: '1px solid #30363d', mt: 1, pt: 1.5 }}>
             {/* 紫色与打卡(绿)/待办(琥珀)/行动(蓝)分开；本页红色只留给「已过期」状态 */}
             <Typography variant="caption" sx={{ color: REMINDER_COLOR, fontWeight: 700, fontSize: '0.8rem', display: 'block', mb: 0.3 }}>
               提醒（{reminders.length}）
             </Typography>
             <Typography variant="caption" sx={{ color: '#484f58', fontSize: '0.7rem', display: 'block', mb: 0.5 }}>
-              今天到期的见上方「行动」；这里是已逾期与未来 {REMINDER_WINDOW} 天内到期的行动项，按紧急度排列
+              今天到期的见上方「行动」；这里是已逾期与未来 {REMINDER_WINDOW} 天内到期的行动项，勾掉后划掉变灰留在原地
             </Typography>
             {reminders.length === 0 ? (
-              <Typography variant="caption" sx={{ color: '#484f58', fontSize: '0.75rem' }}>近一周没有待完成的行动项</Typography>
+              <Typography variant="caption" sx={{ color: '#484f58', fontSize: '0.75rem' }}>近一周没有到期的行动项</Typography>
             ) : (
               reminders.map((item) => (
                 <ReminderRow key={`${item.todo.id}-${item.phase.id}`} item={item} onTogglePhase={onTogglePhase} />

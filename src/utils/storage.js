@@ -73,6 +73,10 @@ function daysBetween(a, b) {
  * 未设截止日的行动项无法判定紧急度，不进提醒；所属待办已完成时其行动也不再提醒。
  * 今天到期（daysLeft === 0）同样不进提醒：日程页右栏的「行动」当天已经列出了这些行动，
  * 在同一屏里再抄一遍只会让同一件事占两行，还会把真正需要往前看的项挤出视野。
+ * **已完成的行动仍留在列表里**（界面用划掉变灰表达状态）：一勾就消失会把下面的条目
+ * 整体推上去，正是这一版要修掉的跳动。为免列表只增不减，已完成且逾期超过 withinDays
+ * 天的行动退出提醒——很久以前补做的那几条不该永远钉在顶部。
+ * `overdue` 只描述截止日与今天的关系（已完成项也可能曾经逾期），状态一律读 `phase.completed`。
  * @returns {Array<{todo:Object, phase:Object, dueDate:string, daysLeft:number, overdue:boolean}>}
  */
 export function getUpcomingPhases(withinDays = 7, todayStr = getToday()) {
@@ -80,9 +84,10 @@ export function getUpcomingPhases(withinDays = 7, todayStr = getToday()) {
   getActiveTodos().forEach((todo) => {
     if (todo.completed) return;
     (todo.phases || []).forEach((phase) => {
-      if (phase.completed || !phase.dueDate) return;
+      if (!phase.dueDate) return;
       const daysLeft = daysBetween(todayStr, phase.dueDate);
       if (daysLeft === 0 || daysLeft > withinDays) return;
+      if (phase.completed && daysLeft < -withinDays) return;
       out.push({ todo, phase, dueDate: phase.dueDate, daysLeft, overdue: daysLeft < 0 });
     });
   });

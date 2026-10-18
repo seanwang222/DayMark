@@ -124,7 +124,7 @@ function makeCompletedTodo() {
   console.log('OK: 过期判定要求截止日存在且早于今天');
 }
 
-/* ---- 6. 一周提醒：窗口边界、逾期置顶、今天到期与无截止日都不进提醒 ---- */
+/* ---- 6. 一周提醒：窗口边界、逾期置顶、今天到期与无截止日不进提醒、完成的仍留在原地 ---- */
 {
   localStorage.clear();
   const pad = (n) => String(n).padStart(2, '0');
@@ -141,10 +141,12 @@ function makeCompletedTodo() {
     { name: '明天到期', dueDate: shift(1) },
     { name: '3天后', dueDate: shift(3) },
     { name: '没有截止日', dueDate: '' },
-    { name: '已完成但有截止日', dueDate: shift(1), completed: true },
+    { name: '已完成仍在窗口内', dueDate: shift(1), completed: true },
+    { name: '逾期很久前已完成', dueDate: shift(-30), completed: true },
   ] });
   addTodo({ title: 'T2', description: {}, priority: 'not_urgent_important', phases: [
     { name: '逾期5天', dueDate: shift(-5) },
+    { name: '逾期20天仍未完成', dueDate: shift(-20) },
     { name: '正好第7天', dueDate: shift(7) },
     { name: '第8天', dueDate: shift(8) },
   ] });
@@ -157,26 +159,44 @@ function makeCompletedTodo() {
   const list = getUpcomingPhases(7, todayStr);
   assert.deepEqual(
     list.map((x) => x.phase.name),
-    ['逾期5天', '逾期2天', '明天到期', '3天后', '正好第7天'],
-    `应按剩余天数升序（逾期自然置顶），实际: ${list.map((x) => `${x.phase.name}(${x.daysLeft})`).join(', ')}`,
+    ['逾期20天仍未完成', '逾期5天', '逾期2天', '明天到期', '已完成仍在窗口内', '3天后', '正好第7天'],
+    `应按剩余天数升序（逾期自然置顶、已完成项留在原位），实际: ${list.map((x) => `${x.phase.name}(${x.daysLeft})`).join(', ')}`,
   );
-  assert.deepEqual(list.map((x) => x.daysLeft), [-5, -2, 1, 3, 7], '剩余天数计算错误');
-  assert.deepEqual(list.map((x) => x.overdue), [true, true, false, false, false], '逾期标记错误');
+  assert.deepEqual(list.map((x) => x.daysLeft), [-20, -5, -2, 1, 1, 3, 7], '剩余天数计算错误');
+  assert.deepEqual(list.map((x) => x.overdue), [true, true, true, false, false, false, false],
+    'overdue 只描述截止日与今天的关系（已完成项曾经逾期也是 true）');
+  assert.deepEqual(list.filter((x) => x.phase.completed).map((x) => x.phase.name), ['已完成仍在窗口内'],
+    '窗口内的已完成行动应仍被列出，由界面划掉变灰，而不是勾一下就消失');
   assert.ok(!list.some((x) => x.phase.name === '今天到期'),
     '1.1.4 起今天到期归「行动」，不再进提醒（同屏重复占位）');
+  assert.ok(!list.some((x) => x.phase.name === '逾期很久前已完成'),
+    '已完成且逾期超过窗口的行动应退出提醒，否则列表只增不减、历史项钉死在顶部');
+  assert.ok(list.some((x) => x.phase.name === '逾期20天仍未完成'),
+    '未完成的逾期行动无论多久都仍要提醒（这条规则不得被"完成项会退场"带走）');
   assert.ok(!list.some((x) => x.phase.name === '第8天'), '超出 7 天窗口的行动项不应进提醒');
   assert.ok(!list.some((x) => x.phase.name === '没有截止日'), '无截止日无法判断紧急度，不应进提醒');
-  assert.ok(!list.some((x) => x.phase.name === '已完成但有截止日'), '已完成的行动项不应进提醒');
   assert.ok(!list.some((x) => x.phase.name === '待办已完成就不提醒'), '所属待办已完成时其行动不应进提醒');
   assert.ok(list.every((x) => x.todo && x.todo.title), '每条提醒都应带上所属待办');
 
-  // 窗口收窄到 2 天：只剩逾期与明天（今天已被排除）
-  assert.deepEqual(getUpcomingPhases(2, todayStr).map((x) => x.daysLeft), [-5, -2, 1], '窗口收窄后不应包含 2 天以外的行动项');
+  // 窗口收窄到 2 天：逾期（含 20 天前那条未完成的）与明天，已完成项按同一窗口向前裁
+  assert.deepEqual(getUpcomingPhases(2, todayStr).map((x) => x.daysLeft), [-20, -5, -2, 1, 1],
+    '窗口收窄后不应包含 2 天以外的行动项');
   // 提醒里的东西不该在「当天清单」的取数里消失：今天到期的行动仍由日程页右栏的行动分组呈现
   const todayPhaseCount = getActiveTodos().reduce(
     (n, t) => n + (t.phases || []).filter((p) => p.dueDate === todayStr && !p.completed).length, 0);
   assert.ok(todayPhaseCount > 0, '今天到期的行动项应仍然存在（只是归行动，不是被删掉）');
-  console.log('OK: 一周提醒按紧急度升序、逾期置顶且正确排除今天/窗口外/无截止日/已完成');
+
+  // 勾掉一条提醒里的行动：它必须仍在同一位置，只是 completed 变 true（界面据此划掉变灰）
+  const target = getUpcomingPhases(7, todayStr).find((x) => x.phase.name === '3天后');
+  toggleTodoPhase(T1.id, target.phase.id);
+  const after = getUpcomingPhases(7, todayStr).map((x) => x.phase.name);
+  assert.deepEqual(after, [
+    '逾期20天仍未完成', '逾期5天', '逾期2天', '明天到期', '已完成仍在窗口内', '3天后', '正好第7天',
+  ], '勾选完成后行动项应原样留在提醒里，位置与条数都不变');
+  assert.equal(
+    getUpcomingPhases(7, todayStr).find((x) => x.phase.name === '3天后').phase.completed, true,
+    '提醒里应带上刚被勾掉的完成状态');
+  console.log('OK: 一周提醒按紧急度升序、逾期置顶、排除今天/窗口外/无截止日，勾掉的留在原地且位置不变');
 }
 
 /* ---- 7. 归档待办：退出界面与提醒，但 STAR / 行动 / 复盘一条不少 ---- */
