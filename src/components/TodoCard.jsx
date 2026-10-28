@@ -15,7 +15,6 @@ import ModeEditIcon from '@mui/icons-material/ModeEdit';
 import EditNoteIcon from '@mui/icons-material/EditNote';
 import ArchiveIcon from '@mui/icons-material/Archive';
 import DeleteIcon from '@mui/icons-material/Delete';
-import AccessTimeIcon from '@mui/icons-material/AccessTime';
 import EventIcon from '@mui/icons-material/Event';
 import FlagIcon from '@mui/icons-material/Flag';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
@@ -345,11 +344,6 @@ function TodoCard({ todo, onRequestComplete, onCancelComplete, onEdit, onArchive
                             </Box>
                           );
                         })()}
-                        {phase.completedTime && (
-                        <Typography variant="caption" sx={{ color: '#484f58', fontSize: '0.65rem', mr: 0.5 }}>
-                          {phase.completedTime}
-                        </Typography>
-                      )}
                     </Box>
                   ))}
                 </Box>
@@ -378,12 +372,6 @@ function TodoCard({ todo, onRequestComplete, onCancelComplete, onEdit, onArchive
               size="small"
               sx={{ color: priority.color, bgcolor: priority.bg, fontWeight: 600, fontSize: '0.7rem', height: 22 }}
             />
-            {todo.completed && todo.completedTime && (
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.3 }}>
-                <AccessTimeIcon sx={{ fontSize: 13, color: '#3fb950' }} />
-                <Typography variant="caption" sx={{ color: '#3fb950', fontWeight: 500 }}>{todo.completedTime}</Typography>
-              </Box>
-            )}
             {todo.dueDate && (
               <Typography variant="caption" sx={{ color: isOverdue() ? '#f85149' : '#6e7681', fontWeight: isOverdue() ? 600 : 400 }}>
                 截止: {formatDateStr(todo.dueDate)}{isOverdue() && ' (已过期)'}
