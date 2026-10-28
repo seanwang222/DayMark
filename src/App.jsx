@@ -5,6 +5,7 @@ import BottomNav from './components/BottomNav';
 import CheckinPage from './pages/CheckinPage';
 import TodoPage from './pages/TodoPage';
 import SchedulePage from './pages/SchedulePage';
+import AlmanacPage from './pages/AlmanacPage';
 
 /**
  * 应用根组件
@@ -28,6 +29,7 @@ function App() {
           <Route path="/checkin" element={<CheckinPage />} />
           <Route path="/todos" element={<TodoPage />} />
           <Route path="/schedule" element={<SchedulePage />} />
+          <Route path="/almanac" element={<AlmanacPage />} />
           <Route path="/summary" element={<Navigate to="/schedule" replace />} />
         </Routes>
       </Box>

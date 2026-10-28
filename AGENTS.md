@@ -8,10 +8,10 @@ DayMark（React 18 + Vite 4 渲染层，Electron 44 桌面层）的协作约定�
 
 ## 0. 动手前
 
-- **改数据/同步相关代码前先跑 `npm run verify`**（六套，见 README 脚本表）；改完再跑一次。任一套失败就不要提交。钩子在 `npm install` 时由 package.json 的 `prepare` 自动装好（也可手动 `npm run hooks:install`），之后每次 commit 都会跑；依赖没装时钩子会拦住提交而不是放行（绕过：`--no-verify`）。
+- **改数据/同步相关代码前先跑 `npm run verify`**（七套，见 README 脚本表）；改完再跑一次。任一套失败就不要提交。钩子在 `npm install` 时由 package.json 的 `prepare` 自动装好（也可手动 `npm run hooks:install`），之后每次 commit 都会跑；依赖没装时钩子会拦住提交而不是放行（绕过：`--no-verify`）。
 - 涉及渲染层或主进程的时序改动，另跑 `npm run build:standalone` 确认打包链没断。
-- 本仓库是 **GitHub 公开仓库**（`origin` = `https://github.com/wangsichen222/DayMark`，默认分支 `master`），推送即发布，公开历史撤回不掉。**`.workbuddy/` 下除 `verify-*.mjs` 之外的一切默认被忽略**（本机笔记、一次性改写脚本、verify 打包结果），新写的一次性脚本天然进不了提交；`userData` 里的快照与坚果云凭据物理上在仓库外（`%APPDATA%\daily-checkin-app\`），不要把它们复制进仓库再提交。任何情况下都不要用 `git add -f` 绕过忽略规则。
-- 提交身份固定为 GitHub noreply 邮箱 `59314215+wangsichen222@users.noreply.github.com`，避免真实邮箱进公开历史。本机全局 git 身份是空值，因此提交要显式 `git -c user.name="Sichen Wang" -c user.email="59314215+wangsichen222@users.noreply.github.com" commit`。
+- 本仓库是 **GitHub 公开仓库**（`origin` = `https://github.com/seanwang222/DayMark`，默认分支 `master`），推送即发布，公开历史撤回不掉。**`.workbuddy/` 下除 `verify-*.mjs` 之外的一切默认被忽略**（本机笔记、一次性改写脚本、verify 打包结果），新写的一次性脚本天然进不了提交；`userData` 里的快照与坚果云凭据物理上在仓库外（`%APPDATA%\daily-checkin-app\`），不要把它们复制进仓库再提交。任何情况下都不要用 `git add -f` 绕过忽略规则。
+- 提交身份固定为 GitHub noreply 邮箱 `59314215+seanwang222@users.noreply.github.com`，避免真实邮箱进公开历史。本机全局 git 身份是空值，因此提交要显式 `git -c user.name="Sichen Wang" -c user.email="59314215+seanwang222@users.noreply.github.com" commit`。
 - 不要调用真实坚果云账号。同步类验证一律走 `.workbuddy/verify-webdav.mjs` 里的本地 mock 服务。
 - 启动 Electron GUI（`DAYMARK_SMOKE` / `electron:dev`）会打开真实窗口并读写 `%APPDATA%\daily-checkin-app\` 下的用户数据，需人工确认后再执行。冒烟模式已把 `userData` 重定向到临时目录，但仍属 GUI 操作。主进程带单实例锁，第二次启动只会把已有窗口调到前台。
 
@@ -61,3 +61,4 @@ DayMark（React 18 + Vite 4 渲染层，Electron 44 桌面层）的协作约定�
 - **日程页的分区色各占一个色相**：打卡 = 绿 `#3fb950`、待办 = 琥珀 `#d29922`、行动 = 蓝 `#58a6ff`、提醒 = 紫色系（`SchedulePage.jsx` 的 `REMINDER_COLOR` / `REMINDER_COLOR_SOON` / `REMINDER_COLOR_LATER`）。红色 `#f85149` 在本页只保留给「已过期 / 已逾期」这个状态语义，不给某个分区当身份色；提醒的紧急度也用紫色由亮到暗，别再拿琥珀与蓝去分级（那会和待办、行动撞色，1.1.4 就是为此把提醒整段换紫）。完成率色阶仍然只有 `colors.js` 一处。
 - **日程页勾选后不得改变列表的行数与行高**：右栏的打卡项与临时任务都曾经在下一次渲染时补一行「完成于 hh:mm」，把下面的分组整体往下推，用户点完一个勾就看见列表跳。完成时间照旧写进数据（`rec.time` / `doneAt`，打卡页与备份都能看得到），只是不再在日程页显示。「提醒」里的行动**按时勾掉后也不离开列表**，改成与其他分区一致的完成态（标题划线 + 变灰、勾选框变绿），位置、条数、行高都不动；唯一例外是本人明确要求的：**逾期之后才补做**的那条整行退出提醒（判定见 §1 提醒条目），别把这条例外推广成"完成即过滤"。要往这个页面加任何「完成后才显示」的信息（时间、备注、复盘摘要），或反过来把完成项从列表里筛掉，先想清楚它会不会改变行的位置——会变就先给它一个恒定占位。
 - MUI 与 Tailwind 并存，组件内优先沿用邻近文件的既有写法，不为样式引入新依赖。
+- **黄历页不联网**：历法、宜忌与时辰全部来自 `src/utils/almanac.js` 对 `lunar-javascript` 的封装，日期位移唯一走 `shiftAlmanacDate()`（UTC 毫秒），不要在组件里拿本地 `Date` 直接加减，否则夏令时 / 时区会让「后一天」错位。新增展示字段先扩 `getAlmanac()` 的返回对象，并同步补 `verify:almanac` 的已知日期断言。

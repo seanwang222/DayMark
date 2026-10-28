@@ -1,7 +1,7 @@
 {
   "name": "daily-checkin-app",
   "private": true,
-  "version": "1.1.4",
+  "version": "1.2.1",
   "type": "module",
   "main": "electron/main.js",
   "scripts": {
@@ -15,11 +15,12 @@
     "build:electron": "vite build && node build-standalone.cjs && node -e \"require('fs').copyFileSync('dist/index-standalone.html','index-standalone.html');console.log('root index-standalone.html updated')\" && electron-builder --win",
     "verify:backup": "esbuild .workbuddy/verify-backup.mjs --bundle --platform=node --format=esm --outfile=.workbuddy/verify-bundle.mjs --log-level=warning && node .workbuddy/verify-bundle.mjs",
     "verify:stats": "esbuild .workbuddy/verify-stats.mjs --bundle --platform=node --format=esm --outfile=.workbuddy/verify-stats-bundle.mjs --log-level=warning && node .workbuddy/verify-stats-bundle.mjs",
+    "verify:almanac": "esbuild .workbuddy/verify-almanac.mjs --bundle --platform=node --format=esm --outfile=.workbuddy/verify-almanac-bundle.mjs --log-level=warning && node .workbuddy/verify-almanac-bundle.mjs",
     "verify:webdav": "esbuild .workbuddy/verify-webdav.mjs --bundle --platform=node --format=esm --outfile=.workbuddy/verify-webdav-bundle.mjs --log-level=warning && node .workbuddy/verify-webdav-bundle.mjs",
     "verify:todo": "esbuild .workbuddy/verify-todo.mjs --bundle --platform=node --format=esm --outfile=.workbuddy/verify-todo-bundle.mjs --log-level=warning && node .workbuddy/verify-todo-bundle.mjs",
     "verify:persistence": "esbuild .workbuddy/verify-persistence.mjs --bundle --platform=node --format=esm --outfile=.workbuddy/verify-persistence-bundle.mjs --log-level=warning && node .workbuddy/verify-persistence-bundle.mjs",
     "verify:config": "esbuild .workbuddy/verify-config.mjs --bundle --platform=node --format=esm --outfile=.workbuddy/verify-config-bundle.mjs --log-level=warning && node .workbuddy/verify-config-bundle.mjs",
-    "verify": "npm run verify:backup && npm run verify:stats && npm run verify:webdav && npm run verify:todo && npm run verify:persistence && npm run verify:config"
+    "verify": "npm run verify:backup && npm run verify:stats && npm run verify:almanac && npm run verify:webdav && npm run verify:todo && npm run verify:persistence && npm run verify:config"
   },
   "description": "DayMark 每日打卡与待办清单桌面应用",
   "author": "DayMark",
@@ -57,6 +58,7 @@
     "electron": "^44.1.0",
     "electron-builder": "^26.15.3",
     "esbuild": "^0.18.20",
+    "lunar-javascript": "^1.7.7",
     "postcss": "^8.4.27",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",

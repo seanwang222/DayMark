@@ -6,6 +6,7 @@ import Button from '@mui/material/Button';
 import CalendarMonthIcon from '@mui/icons-material/CalendarMonth';
 import ChecklistIcon from '@mui/icons-material/Checklist';
 import EventIcon from '@mui/icons-material/Event';
+import MenuBookIcon from '@mui/icons-material/MenuBook';
 import SettingsBackupRestoreIcon from '@mui/icons-material/SettingsBackupRestore';
 import DataManagerDialog from './DataManagerDialog';
 
@@ -17,6 +18,7 @@ const NAV_ITEMS = [
   { key: 'schedule', label: '日程', icon: <EventIcon />, path: '/schedule' },
   { key: 'checkin', label: '打卡', icon: <CalendarMonthIcon />, path: '/checkin' },
   { key: 'todos', label: '待办', icon: <ChecklistIcon />, path: '/todos' },
+  { key: 'almanac', label: '黄历', icon: <MenuBookIcon />, path: '/almanac' },
 ];
 
 function BottomNav() {
