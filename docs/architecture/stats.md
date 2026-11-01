@@ -98,31 +98,32 @@ streakEnd === end || streakEnd === formatDate(prevDay) ? streakEndRun : 0
 
 **`!!dueDate` 不能省。** `:106-108` 给了理由：`YYYY-MM-DD` 字符串比较里，空串小于任何日期，直接写 `dueDate < todayStr` 会把**所有没有截止日的待办**标成过期。别在现场重写这套比较。
 
-## 提醒列表：一个排序键，两条完成项退场规则
+## 提醒列表：一个排序键，一条完成项退场规则
 
-`getUpcomingPhases(withinDays = 7, todayStr = getToday())`（`storage.js:88-105`）：
+`getUpcomingPhases(withinDays = 7, todayStr = getToday())`（`storage.js:87-100`）：
 
-- 只遍历 `getActiveTodos()`（`:90`），归档待办连同它的行动一起退出提醒；
-- 剔除已完成待办（`:91`）与无截止日的行动（`:93`）——**但不剔除已完成的行动**；
-- 剔除今天到期与超出向前窗口的（`:95`）；已完成的两条退场判定在 `:97`（补做）与 `:98`（回看窗）；
-- `daysLeft = daysBetween(todayStr, dueDate)`（`:94`），**逾期为负数**；
-- 比较器只有一处：`:103` 的 `a.daysLeft - b.daysLeft || title.localeCompare(title)`。逾期自然置顶，不需要单独的「逾期分组」，也不给完成项单独排位——把完成项"沉底"会让刚勾掉的那一行跳到别处。
+- 只遍历 `getActiveTodos()`（`:89`），归档待办连同它的行动一起退出提醒；
+- 剔除已完成待办（`:90`）、无截止日的行动、**以及已完成的行动**（`:92`）——提醒是「还没做」的队列；
+- 剔除今天到期与超出向前窗口的（`:94`）：**未完成的逾期项不受 `withinDays` 约束**，再久也继续提醒；
+- `daysLeft = daysBetween(todayStr, dueDate)`（`:93`），**逾期为负数**；
+- 比较器只有一处：`:98` 的 `a.daysLeft - b.daysLeft || title.localeCompare(title)`。逾期自然置顶，不需要单独的「逾期分组」。
 
 1.1.4 起 `daysLeft === 0` 不进提醒：日程页右栏的「行动」分组本来就按选中日列出当天到期的行动，选中「今天」时两者完全重合，同屏再抄一遍只会把真正要往前看的项挤出视野。数据本身没有任何变化——那些行动仍然挂在同一个 `phase.dueDate` 上，只是换了展示位置，所以「提醒（N）」的计数会相应减少。
 
-**已完成项的去留取决于「哪天勾的」，不是「勾没勾」**。要分得开就必须有完成日期，所以 `toggleTodoPhase`（`storage.js:1083`）在 `completedTime`（HH:mm，界面显示用）之外还写 **`phase.completedAt`（YYYY-MM-DD，判定用）**，取消完成时两者一起归零：
+**1.2.3 起「勾掉即退出」，不再分按时与补做。** 1.1.4~1.2.2 的口径是 `completedAt ≤ dueDate` 留灰原位、`> dueDate` 退出，两条规则并存恰好造出用户报告的「勾选后并非每次都消失」：
 
-| 情况 | 判定 | 结果 |
+| 情况 | 旧口径 | 现在 |
 |---|---|---|
-| 按时 / 提前勾掉 | `completedAt ≤ dueDate` | 留在列表里划掉变灰；仍受向前 `withinDays` 天的回看窗约束（`:98`） |
-| 逾期之后才补做 | `completedAt > dueDate` | **直接不显示**（`:97`）——提醒负责「还没做」，一次迟到的补做既不该继续标红，也不该在灰色里长期占位 |
-| 老数据 / 旧备份 | 没有 `completedAt` | 判不出是否补做，退回上一行的窗口规则；既不当成补做抹掉，也不拿今天或导出当天冒充 |
+| 按时 / 提前勾掉 | 留在列表变灰，直到超出回看窗——截止日 +5 天的那条要占位 **12 天** | **整行退出**（`:92`） |
+| 逾期之后才补做 | 整行退出 | 整行退出（不变，与上一行走同一条判定） |
+| 老数据 / 旧备份没有 `completedAt` | 判不出是否补做，退回窗口规则，于是一条完成很久的灰行长期挂着 | 整行退出（`phase.completed` 一直是布尔值，不依赖日期） |
+| 截止日 = 今天，今天勾掉 | 当天归「行动」看不到它，**第二天却带着「按时完成」的身份新出现在提醒里** | 不再出现 |
 
-界面侧 `ReminderRow`（`SchedulePage.jsx:168`）读 `phase.completed` 画完成态：按时勾掉的那行**位置、行高、条数都不变**，与其他分区的完成效果一致（标题划线 + 变灰、勾选框变绿）；只有逾期补做的会整行退出，这是本人明确要求的例外，别顺手把按时的也删掉。`overdue` 字段只描述截止日与今天的关系（已完成项也可能为 `true`），界面对完成项一律用灰色、不再标红。
+`ReminderRow`（`SchedulePage.jsx:168`）因此不再读 `phase.completed`：取数里就没有已完成项，界面不需要画灰色完成态，也没有「划掉变灰」那一套。勾选仍然是 `toggleTodoPhase`（`storage.js:1078`），取消完成会让那条以未完成身份回到提醒。
 
-这个字段要活着走完四处白名单：`addTodo`、`editTodo`、`normalizeTodo`（`:1118`，非法值归零）与 `AddTodoDialog` 提交时的原值回传——对话框不显示它，漏传一次就把「补做」洗成「按时」，所以 `verify:todo` 第 9 组按 `verify:config` 的做法用源码断言锁住这条接线。CSV 侧 `formatPhases` / `parsePhases`（`backup.js:165` / `:180`）把它编进阶段串 `[已完成@截止日]名称 (完成日期 完成时刻)`，旧备份只有 `(HH:mm)` 时读回空日期。
+`phase.completedAt`（YYYY-MM-DD）仍然由 `toggleTodoPhase` 写入、取消完成时与 `completedTime` 一起归零，但**它现在只服务备份**：CSV 阶段串 `[已完成@截止日]名称 (完成日期 完成时刻)` 由 `formatPhases` / `parsePhases`（`backup.js:165` / `:180`）编解码，旧备份只有 `(HH:mm)` 时读回空日期。它仍然要活着走完四处白名单——`addTodo`、`editTodo`、`normalizeTodo`（`:1113`，非法值归零）与 `AddTodoDialog` 提交时的原值回传（对话框不显示它，漏传一次就把「哪天做完」洗成未知），`verify:todo` 第 9 组按 `verify:config` 的做法用源码断言锁住这条接线。**但不要再给它加任何判定职责**：提醒的取舍只看 `completed`。
 
-改窗口、改排序、改「谁进提醒 / 完成项怎么取舍」都去扩 `verify:todo` 第 6 组与第 9 组（今天到期被排除、按时完成的留原位、补做的退出、老数据退回窗口规则、完成日期随勾选写入并随取消清零；归档排除锁在第 7 组，CSV 日期往返锁在 `verify:backup` 第 12 组），不要在页面里另写一套。
+改窗口、改排序、改「谁进提醒 / 完成项怎么取舍」都去扩 `verify:todo` 第 6 组与第 9 组（今天到期被排除、任何已完成都不占位、未完成的逾期不受窗口约束、完成日期随勾选写入并随取消清零；归档排除锁在第 7 组，CSV 日期往返锁在 `verify:backup` 第 12 组），不要在页面里另写一套。
 
 ## 日期一律是本地日
 
@@ -137,7 +138,7 @@ streakEnd === end || streakEnd === formatDate(prevDay) ? streakEndRun : 0
 | **不参与统计（excluded）** | `CheckinCalendar.jsx:72-76`、图例 `:112-115` | 无填充色：`bgcolor: transparent` + 虚线边框，与「0%」的实心 `#161b22` 区分开 |
 | **状态语义（打卡成功、勾选完成）** | `CheckinItem.jsx:124`、`TodoCard.jsx:177` / `:322`、`CheckinPage.jsx:64`（StatCell highlight）与 `:352`（「今天」标签）、`SchedulePage.jsx:64` | 绿 `#3fb950` |
 | **日程页分区标题** | `SchedulePage.jsx:524`（打卡）/ `:525`（待办）/ `:526`（行动） | 绿 `#3fb950` / 琥珀 `#d29922` / 蓝 `#58a6ff` |
-| **日程页「提醒」** | `SchedulePage.jsx:41` `REMINDER_COLOR`（标题）、`:43` `#d2a8ff`（明天到期）、`:45` `#a371f7`（N 天后）；完成态在 `ReminderRow`（`:168`）取 `done ? '#6e7681'`（`:172`） | 紫色系，1.1.4 起与上面三个分区色错开；段内只留红 `#f85149` 表达「已逾期」（`:158`），沿用本页红色只作状态语义的既有约定。**已完成的一律转灰**（标题 `#6e7681` + 划线、勾选框 `#3fb950`），既不标红也不标紫——灰就是这一页的「做完了」 |
+| **日程页「提醒」** | `SchedulePage.jsx:41` `REMINDER_COLOR`（标题）、`:43` `#d2a8ff`（明天到期）、`:45` `#a371f7`（N 天后）；紧急度上色在 `reminderUrgency`（`:157`）→ `ReminderRow`（`:168`） | 紫色系，1.1.4 起与上面三个分区色错开；段内只留红 `#f85149` 表达「已逾期」（`:158`），沿用本页红色只作状态语义的既有约定。1.2.3 起**这一栏没有完成态**：已完成的行动不出现在取数里，所以既没有灰色划线，也不需要给完成项另设一档紫色 |
 
 频率色阶的调用点：`CheckinCalendar.jsx:76`、`QuarterlyChart.jsx:65`、`YearlyChart.jsx:64`、`CheckinPage.jsx:393`（今日进度条）。改配色只动 `colors.js` 与这几个调用点，**不要回到分档硬编码，也不要给频率引入青/绿**——紫色是给「分区身份」用的，不是给完成率用的。
 

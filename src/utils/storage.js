@@ -74,15 +74,14 @@ function daysBetween(a, b) {
  * 今天到期（daysLeft === 0）同样不进提醒：日程页右栏的「行动」当天已经列出了这些行动，
  * 在同一屏里再抄一遍只会让同一件事占两行，还会把真正需要往前看的项挤出视野。
  *
- * 已完成项去不去列表，看的是「什么时候勾的」，不是「勾没勾」：
- * - **计划完成日当天或之前勾掉的**（按时、提前）→ 留在列表里，由界面划掉变灰，
- *   作为最近做完了什么的回看；但同样只向前看 withinDays 天，更早的成功不必一直占位。
- * - **计划完成日之后才勾掉的**（逾期后补做）→ 直接不显示。提醒负责「还没做」，
- *   一次迟到的补做既不该继续标红「已逾期」，也不该在灰色里长期留痕。
- * - 完成日期来自 `phase.completedAt`（1.1.4 起由 toggleTodoPhase 写入）。1.1.4 之前
- *   的数据与旧备份没有它，无法判断是否补做，一律退回上面第一条的窗口规则。
+ * 提醒是「还没做」的队列，所以**已完成的行动一律不显示**（1.2.3 起，不分按时还是补做）：
+ * 勾掉即整行退出，不再留一条灰痕。理由有两条——按时勾掉的那条会一路占位到超出回看窗
+ * （截止日 +5 天、今天勾掉，还要在提醒里挂 12 天）；而截止日就是今天的那条，今天归
+ * 「行动」，明天却带着「按时完成」的身份新出现在提醒里，看起来像「勾了没生效」。
+ * 完成态本身照旧写入 `phase.completed` / `completedTime` / `completedAt`，待办页、
+ * 日程页「行动」分组和备份都还看得见，取消完成即回到提醒。
  *
- * `overdue` 只描述截止日与今天的关系（已完成项也可能曾经逾期），状态一律读 `phase.completed`。
+ * `overdue` 只描述截止日与今天的关系；列表里既不会有完成的待办，也不会有完成的行动。
  * @returns {Array<{todo:Object, phase:Object, dueDate:string, daysLeft:number, overdue:boolean}>}
  */
 export function getUpcomingPhases(withinDays = 7, todayStr = getToday()) {
@@ -90,13 +89,9 @@ export function getUpcomingPhases(withinDays = 7, todayStr = getToday()) {
   getActiveTodos().forEach((todo) => {
     if (todo.completed) return;
     (todo.phases || []).forEach((phase) => {
-      if (!phase.dueDate) return;
+      if (!phase.dueDate || phase.completed) return;
       const daysLeft = daysBetween(todayStr, phase.dueDate);
       if (daysLeft === 0 || daysLeft > withinDays) return;
-      if (phase.completed) {
-        if (phase.completedAt && String(phase.completedAt) > String(phase.dueDate)) return;
-        if (daysLeft < -withinDays) return;
-      }
       out.push({ todo, phase, dueDate: phase.dueDate, daysLeft, overdue: daysLeft < 0 });
     });
   });
@@ -1088,8 +1083,8 @@ export function toggleTodoPhase(todoId, phaseId) {
   if (!phase) return todos;
   phase.completed = !phase.completed;
   phase.completedTime = phase.completed ? getNowTime() : '';
-  // 提醒要分得清「按时完成」与「逾期后补做」，光有 HH:mm 不够，必须记下勾掉的那一天。
-  // 取消完成一律归零（不是 delete）：这个字段本来就总写，留空即「不知道完成于哪天」。
+  // 提醒从 1.2.3 起不再靠它分辨按时与补做（完成即退出），但这个日期仍然要记：
+  // CSV 备份的阶段串会导出「完成日期 + 完成时刻」，取消完成时两者一起归零。
   phase.completedAt = phase.completed ? getToday() : '';
   safeWrite(STORAGE_KEYS.TODOS, todos);
   return todos;
@@ -1147,8 +1142,8 @@ function normalizeTodo(t) {
           name: String(p.name).trim(),
           completed: !!p.completed,
           completedTime: p.completedTime || '',
-          // 1.1.4 起行动项记「完成于哪天」，用于区分按时完成与逾期补做；
-          // 老数据与旧备份没有这个字段 → 归一为 ''，由调用方按「不知道」处理
+          // 行动项的「完成于哪天」，随 CSV / JSON 备份往返；读不出的老数据与旧备份归一为 ''。
+          // 提醒已不再读它（1.2.3 起完成即退出），别让这个字段再长出新的判定职责。
           completedAt: /^\d{4}-\d{2}-\d{2}$/.test(String(p.completedAt || '').slice(0, 10))
             ? String(p.completedAt).slice(0, 10)
             : '',

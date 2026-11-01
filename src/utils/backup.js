@@ -168,8 +168,7 @@ function formatPhases(phases) {
     .map((p) => {
       const label = p.completed ? '已完成' : '未完成';
       const due = p.dueDate ? `@${p.dueDate}` : '';
-      // 完成标记带上「哪天几点」：只存 HH:mm 的话，导出→恢复会把「逾期后补做」
-      // 变成「按时完成与否未知」，提醒里的取舍跟着翻转
+      // 完成标记带上「哪天几点」：只存 HH:mm 的话，导出→恢复就看不出这条行动是哪天做完的
       const stamp = p.completed ? [p.completedAt, p.completedTime].filter(Boolean).join(' ') : '';
       const time = stamp ? ` (${stamp})` : '';
       return `[${label}${due}]${p.name}${time}`;

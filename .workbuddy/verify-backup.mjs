@@ -68,8 +68,7 @@ function todosComparable(todos) {
         name: p.name,
         completed: p.completed,
         completedTime: p.completed ? p.completedTime : '',
-        // 完成日期决定「按时做完」还是「逾期补做」，导出→恢复丢了它，
-        // 一条本该退出提醒的补做就会重新变成灰色的按时完成
+        // 完成日期记的是「哪天做完的」，导出→恢复丢了它，备份里就只剩下时刻而看不出迟了一天
         completedAt: p.completed ? (p.completedAt || '') : '',
       })),
     }));
@@ -451,7 +450,7 @@ console.log('OK: 归档按月分组正确 —— 月份倒序、同月合并两�
   assert.equal(t.phases.find((p) => p.name === '按时做完').completedAt, '2026-09-10', 'CSV 往返必须保住完成日期');
   assert.equal(t.phases.find((p) => p.name === '按时做完').completedTime, '09:00', '完成时刻仍应是 HH:mm');
   assert.equal(t.phases.find((p) => p.name === '逾期补做').completedAt, '2026-09-20',
-    '补做的完成日期同样要保住，丢了它这条就会在提醒里伪装成按时完成');
+    '补做的完成日期同样要保住，丢了它这条就看不出到底是哪天做完的');
   assert.equal(t.phases.find((p) => p.name === '还没做').completedAt, '', '未完成的行动没有完成日期');
 
   // 1.1.4 之前的备份只有「(HH:mm)」：日期留空表示确实不知道，绝不拿导出当天或今天冒充
