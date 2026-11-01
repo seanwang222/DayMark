@@ -165,7 +165,7 @@ function AddTodoDialog({ open, onClose, onSave, editTodo }) {
         completed: !!a.completed,
         completedTime: a.completedTime || '',
         // 完成日期必须原样带回：本对话框不显示它，漏掉这一个字段，
-        // 编辑一次就会把「逾期后补做」伪装成「按时完成」，提醒里的取舍随之翻转
+        // 编辑一次就把「哪天做完的」洗成未知，备份里的记录跟着退化
         completedAt: a.completedAt || '',
         dueDate: a.dueDate || '',
       }))

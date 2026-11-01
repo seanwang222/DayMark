@@ -64,10 +64,10 @@ const TODO_HEADERS = [
 
 /**
  * 电子表格公式注入护栏：以 = + - @ 或制表符开头的单元格，Excel 会当公式/DDE 执行。
- * 备份 CSV 的内容可能来自另一台设备或一份别人给的备份文件，属于跨信任边界，
- * 因此导出时前置单引号使其退化为纯文本（Excel 里会看到这个撇号，是有意为之）。
- * parseCSV 读回时会脱掉同一层护栏，DayMark 自身的导出→导入往返不受影响
- * （唯一例外：内容本身就以 `'= ` 这类「撇号+公式符」开头，会被当成护栏少一个撇号）。
+ * 备份 CSV 的内容可能来自另一台设备或一份别人给的备份文件，属于跳信任边界，
+ * 因此导出时前置单引号使其退化为纯文本（Excel 里会看到这个掠号，是有意为之）。
+ * parseCSV 读回时会脱掉同一层护栏，保证 DayMark 自身的导出→导入往返不受影响
+ * （唯一例外：内容本身就以 `'= ` 这类「掠号+公式符」开头，会被当成护栏少一个掠号）。
  */
 const FORMULA_LEAD_RE = /^[=+\-@\t]/;
 
@@ -168,8 +168,7 @@ function formatPhases(phases) {
     .map((p) => {
       const label = p.completed ? '已完成' : '未完成';
       const due = p.dueDate ? `@${p.dueDate}` : '';
-      // 完成标记带上「哪天几点」：只存 HH:mm 的话，导出→恢复会把「逾期后补做」
-      // 变成「按时完成与否未知」，提醒里的取舍跟着翻转
+      // 完成标记带上「哪天几点」：只存 HH:mm 的话，导出→恢复就看不出这条行动是哪天做完的
       const stamp = p.completed ? [p.completedAt, p.completedTime].filter(Boolean).join(' ') : '';
       const time = stamp ? ` (${stamp})` : '';
       return `[${label}${due}]${p.name}${time}`;
