@@ -6,6 +6,7 @@ import {
   IconButton,
   Chip,
   Card,
+  Tooltip,
 } from '@mui/material';
 import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
@@ -16,6 +17,15 @@ import {
   shiftAlmanacDate,
   isValidAlmanacDate,
 } from '../utils/almanac';
+import {
+  explainTerm,
+  explainGanZhi,
+  explainChongSha,
+  explainXiu,
+  explainTianShen,
+  explainTaiShen,
+  explainHour,
+} from '../utils/almanacGlossary';
 import { getToday } from '../utils/storage';
 
 const GOLD = '#d29922';
@@ -40,37 +50,105 @@ const fmtMd = (s) => {
   return p.length === 3 ? `${p[1]}-${p[2]}` : s || '';
 };
 
-const SectionTitle = ({ children, accent = GOLD, extra }) => (
+const TIP_BG = '#1c2128';
+const TIP_BORDER = 'rgba(210,153,34,0.4)';
+
+/** 有解释才给 help 光标，作为「这里可以悬停」的视觉暗示；不占任何布局空间 */
+const hintSx = (explain) => (explain ? { cursor: 'help' } : null);
+
+const TipBody = ({ explain }) => (
+  <Box>
+    <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 0.75, mb: 0.5 }}>
+      <Typography sx={{ fontSize: '0.86rem', fontWeight: 700, color: GOLD_LIGHT, lineHeight: 1.35 }}>
+        {explain.title}
+      </Typography>
+      <Typography sx={{ fontSize: '0.62rem', color: MUTED, whiteSpace: 'nowrap' }}>
+        {explain.tag}
+      </Typography>
+    </Box>
+    {explain.lines.map((line, index) => (
+      <Typography
+        key={index}
+        sx={{ fontSize: '0.74rem', color: TEXT, lineHeight: 1.7, mt: index ? 0.4 : 0 }}
+      >
+        {line}
+      </Typography>
+    ))}
+  </Box>
+);
+
+/**
+ * 名词悬浮解释。查不到词条时原样返回子元素，不挂 Tooltip，
+ * 因此不会出现空弹窗，也不给任何元素额外包一层 DOM——行高与行数保持不变。
+ */
+const TermTip = ({ explain, children }) => {
+  if (!explain) return children;
+  return (
+    <Tooltip
+      arrow
+      placement="top"
+      enterDelay={150}
+      leaveDelay={80}
+      title={<TipBody explain={explain} />}
+      slotProps={{
+        tooltip: {
+          sx: {
+            bgcolor: TIP_BG,
+            border: `1px solid ${TIP_BORDER}`,
+            borderRadius: '10px',
+            maxWidth: 340,
+            px: 1.25,
+            py: 1,
+            boxShadow: '0 8px 24px rgba(0,0,0,0.5)',
+          },
+        },
+        arrow: { sx: { color: TIP_BG } },
+      }}
+    >
+      {children}
+    </Tooltip>
+  );
+};
+
+const SectionTitle = ({ children, accent = GOLD, extra, explain }) => (
   <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5 }}>
     <Box sx={{ width: 3, height: 16, borderRadius: 2, bgcolor: accent, flexShrink: 0 }} />
-    <Typography variant="subtitle1" sx={{ fontWeight: 600, color: TEXT }}>
-      {children}
-    </Typography>
+    <TermTip explain={explain}>
+      <Typography variant="subtitle1" sx={{ fontWeight: 600, color: TEXT, ...hintSx(explain) }}>
+        {children}
+      </Typography>
+    </TermTip>
     {extra}
   </Box>
 );
 
-const TagList = ({ items, tone = 'neutral', empty = '—' }) => {
+const TagList = ({ items, tone = 'neutral', empty = '—', category }) => {
   const palette = TONES[tone] || TONES.neutral;
   if (!items || items.length === 0) {
     return <Typography variant="body2" sx={{ color: MUTED }}>{empty}</Typography>;
   }
   return (
     <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.75 }}>
-      {items.map((item, index) => (
-        <Chip
-          key={`${item}-${index}`}
-          label={item}
-          size="small"
-          sx={{
-            color: palette.color,
-            bgcolor: palette.bg,
-            border: '1px solid',
-            borderColor: palette.border,
-            fontSize: '0.78rem',
-          }}
-        />
-      ))}
+      {items.map((item, index) => {
+        const explain = category ? explainTerm(item, category) : null;
+        return (
+          <TermTip key={`${item}-${index}`} explain={explain}>
+            <Chip
+              label={item}
+              size="small"
+              tabIndex={explain ? 0 : undefined}
+              sx={{
+                color: palette.color,
+                bgcolor: palette.bg,
+                border: '1px solid',
+                borderColor: palette.border,
+                fontSize: '0.78rem',
+                ...hintSx(explain),
+              }}
+            />
+          </TermTip>
+        );
+      })}
     </Box>
   );
 };
@@ -122,23 +200,35 @@ function AlmanacPage() {
 
   const dateLabel = `${data.year}年${data.month}月${data.day}日`;
   const facts = [
-    ['冲煞', `冲${data.chong} · 煞${data.sha}`],
-    ['值神', `${data.tianShen} · ${data.tianShenType}${data.tianShenLuck ? `（${data.tianShenLuck}）` : ''}`],
-    ['建除十二神', `${data.zhiXing}日`],
-    ['纳音', data.naYin],
-    ['星宿', `${data.xiu}宿 · ${data.xiuZheng}${data.xiuAnimal}（${data.xiuLuck}）`],
-    ['胎神', data.taiShen],
-    ['物候', data.wuHou],
-    ['月相', data.yueXiang],
+    { label: '冲煞', value: `冲${data.chong} · 煞${data.sha}`, explain: explainChongSha(data.chong, data.sha) },
+    {
+      label: '值神',
+      value: `${data.tianShen} · ${data.tianShenType}${data.tianShenLuck ? `（${data.tianShenLuck}）` : ''}`,
+      explain: explainTianShen(data.tianShen, data.tianShenType, data.tianShenLuck),
+    },
+    { label: '建除十二神', value: `${data.zhiXing}日`, explain: explainTerm(data.zhiXing, 'zhiXing') },
+    { label: '纳音', value: data.naYin, explain: explainTerm(data.naYin, 'naYin') },
+    {
+      label: '星宿',
+      value: `${data.xiu}宿 · ${data.xiuZheng}${data.xiuAnimal}（${data.xiuLuck}）`,
+      explain: explainXiu(data.xiu, data.xiuZheng, data.xiuAnimal, data.xiuLuck),
+    },
+    { label: '胎神', value: data.taiShen, explain: explainTaiShen(data.taiShen) },
+    { label: '物候', value: data.wuHou, explain: explainTerm(data.wuHou, 'wuHou') },
+    { label: '月相', value: data.yueXiang, explain: explainTerm(data.yueXiang, 'yueXiang') },
   ];
   const directions = [
-    ['喜神', data.directions.xi],
-    ['福神', data.directions.fu],
-    ['财神', data.directions.cai],
-    ['阳贵神', data.directions.yangGui],
-    ['阴贵神', data.directions.yinGui],
+    { label: '喜神', value: data.directions.xi },
+    { label: '福神', value: data.directions.fu },
+    { label: '财神', value: data.directions.cai },
+    { label: '阳贵神', value: data.directions.yangGui },
+    { label: '阴贵神', value: data.directions.yinGui },
   ];
   const luckyHours = data.times.filter((t) => t.type === '黄道').length;
+  const lunarLabelExplain = explainTerm('农历', 'label');
+  const jieQiExplain = data.jieQi ? explainTerm(data.jieQi, 'jieQi') : null;
+  const prevJieQiExplain = data.prevJieQi ? explainTerm(data.prevJieQi.name, 'jieQi') : null;
+  const nextJieQiExplain = data.nextJieQi ? explainTerm(data.nextJieQi.name, 'jieQi') : null;
 
   return (
     <Box sx={{ maxWidth: 1180, mx: 'auto', px: 2, pt: 2, pb: 3 }}>
@@ -272,7 +362,9 @@ function AlmanacPage() {
       >
         <Box sx={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 2 }}>
           <Box sx={{ minWidth: 260 }}>
-            <Typography variant="caption" sx={{ color: GOLD_LIGHT, letterSpacing: '0.2em' }}>农历</Typography>
+            <TermTip explain={lunarLabelExplain}>
+              <Typography variant="caption" sx={{ color: GOLD_LIGHT, letterSpacing: '0.2em', ...hintSx(lunarLabelExplain) }}>农历</Typography>
+            </TermTip>
             <Typography
               sx={{
                 fontSize: { xs: '1.65rem', md: '2.15rem' },
@@ -285,10 +377,27 @@ function AlmanacPage() {
               {data.lunarText}
             </Typography>
             <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.75 }}>
-              <Chip size="small" label={`${data.yearGanZhi}年`} sx={{ color: TEXT, bgcolor: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.09)' }} />
-              <Chip size="small" label={`${data.monthGanZhi}月`} sx={{ color: TEXT, bgcolor: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.09)' }} />
-              <Chip size="small" label={`${data.dayGanZhi}日`} sx={{ color: TEXT, bgcolor: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.09)' }} />
-              <Chip size="small" label={`生肖${data.zodiac}`} sx={{ color: GOLD_LIGHT, bgcolor: 'rgba(210,153,34,0.1)', border: '1px solid rgba(210,153,34,0.3)' }} />
+              {[
+                { text: `${data.yearGanZhi}年`, explain: explainGanZhi(data.yearGanZhi), gold: false },
+                { text: `${data.monthGanZhi}月`, explain: explainGanZhi(data.monthGanZhi), gold: false },
+                { text: `${data.dayGanZhi}日`, explain: explainGanZhi(data.dayGanZhi), gold: false },
+                { text: `生肖${data.zodiac}`, explain: explainTerm(data.zodiac, 'zodiac'), gold: true },
+              ].map((chip) => (
+                <TermTip key={chip.text} explain={chip.explain}>
+                  <Chip
+                    size="small"
+                    label={chip.text}
+                    tabIndex={chip.explain ? 0 : undefined}
+                    sx={{
+                      color: chip.gold ? GOLD_LIGHT : TEXT,
+                      bgcolor: chip.gold ? 'rgba(210,153,34,0.1)' : 'rgba(255,255,255,0.04)',
+                      border: '1px solid',
+                      borderColor: chip.gold ? 'rgba(210,153,34,0.3)' : 'rgba(255,255,255,0.09)',
+                      ...hintSx(chip.explain),
+                    }}
+                  />
+                </TermTip>
+              ))}
             </Box>
           </Box>
 
@@ -299,17 +408,28 @@ function AlmanacPage() {
             </Typography>
             <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.75, justifyContent: { xs: 'flex-start', md: 'flex-end' } }}>
               {data.jieQi && (
-                <Chip size="small" label={`今日节气 · ${data.jieQi}`} sx={{ color: GOLD_LIGHT, bgcolor: 'rgba(210,153,34,0.14)', border: '1px solid rgba(210,153,34,0.4)' }} />
+                <TermTip explain={jieQiExplain}>
+                  <Chip size="small" label={`今日节气 · ${data.jieQi}`} tabIndex={jieQiExplain ? 0 : undefined} sx={{ color: GOLD_LIGHT, bgcolor: 'rgba(210,153,34,0.14)', border: '1px solid rgba(210,153,34,0.4)', ...hintSx(jieQiExplain) }} />
+                </TermTip>
               )}
               {!data.jieQi && data.prevJieQi && (
-                <Chip size="small" label={`上一节气 ${data.prevJieQi.name} ${fmtMd(data.prevJieQi.date)}`} sx={{ color: MUTED, bgcolor: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }} />
+                <TermTip explain={prevJieQiExplain}>
+                  <Chip size="small" label={`上一节气 ${data.prevJieQi.name} ${fmtMd(data.prevJieQi.date)}`} tabIndex={prevJieQiExplain ? 0 : undefined} sx={{ color: MUTED, bgcolor: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)', ...hintSx(prevJieQiExplain) }} />
+                </TermTip>
               )}
               {data.nextJieQi && (
-                <Chip size="small" label={`下一节气 ${data.nextJieQi.name} ${fmtMd(data.nextJieQi.date)} · ${data.nextJieQi.daysLeft} 天后`} sx={{ color: MUTED, bgcolor: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }} />
+                <TermTip explain={nextJieQiExplain}>
+                  <Chip size="small" label={`下一节气 ${data.nextJieQi.name} ${fmtMd(data.nextJieQi.date)} · ${data.nextJieQi.daysLeft} 天后`} tabIndex={nextJieQiExplain ? 0 : undefined} sx={{ color: MUTED, bgcolor: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)', ...hintSx(nextJieQiExplain) }} />
+                </TermTip>
               )}
-              {data.festivals.map((f) => (
-                <Chip key={f} size="small" label={f} sx={{ color: '#ff7b72', bgcolor: 'rgba(248,81,73,0.1)', border: '1px solid rgba(248,81,73,0.3)' }} />
-              ))}
+              {data.festivals.map((f) => {
+                const explain = explainTerm(f, 'festival');
+                return (
+                  <TermTip key={f} explain={explain}>
+                    <Chip size="small" label={f} tabIndex={explain ? 0 : undefined} sx={{ color: '#ff7b72', bgcolor: 'rgba(248,81,73,0.1)', border: '1px solid rgba(248,81,73,0.3)', ...hintSx(explain) }} />
+                  </TermTip>
+                );
+              })}
             </Box>
           </Box>
         </Box>
@@ -318,16 +438,16 @@ function AlmanacPage() {
       {/* 宜 / 忌 */}
       <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1fr 1fr' }, gap: 2, mb: 2 }}>
         <Card sx={{ p: 2, borderColor: 'rgba(63,185,80,0.3)' }}>
-          <SectionTitle accent={GREEN} extra={<Typography variant="caption" sx={{ color: MUTED }}>{data.yi.length} 项</Typography>}>
+          <SectionTitle accent={GREEN} explain={explainTerm('今日宜', 'label')} extra={<Typography variant="caption" sx={{ color: MUTED }}>{data.yi.length} 项</Typography>}>
             今日宜
           </SectionTitle>
-          <TagList items={data.yi} tone="green" empty="诸事不宜" />
+          <TagList items={data.yi} tone="green" empty="诸事不宜" category="yi" />
         </Card>
         <Card sx={{ p: 2, borderColor: 'rgba(248,81,73,0.3)' }}>
-          <SectionTitle accent={RED} extra={<Typography variant="caption" sx={{ color: MUTED }}>{data.ji.length} 项</Typography>}>
+          <SectionTitle accent={RED} explain={explainTerm('今日忌', 'label')} extra={<Typography variant="caption" sx={{ color: MUTED }}>{data.ji.length} 项</Typography>}>
             今日忌
           </SectionTitle>
-          <TagList items={data.ji} tone="red" empty="百无禁忌" />
+          <TagList items={data.ji} tone="red" empty="百无禁忌" category="ji" />
         </Card>
       </Box>
 
@@ -335,67 +455,84 @@ function AlmanacPage() {
       <Card sx={{ p: 2, mb: 2 }}>
         <SectionTitle>日辰详情</SectionTitle>
         <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 1 }}>
-          {facts.map(([label, value]) => (
-            <Box
-              key={label}
-              sx={{
-                p: 1.25,
-                borderRadius: '12px',
-                bgcolor: 'rgba(255,255,255,0.02)',
-                border: '1px solid',
-                borderColor: 'divider',
-              }}
-            >
-              <Typography variant="caption" sx={{ color: MUTED }}>{label}</Typography>
-              <Typography variant="body2" sx={{ color: TEXT, mt: 0.25 }}>{value || '—'}</Typography>
-            </Box>
-          ))}
+          {facts.map(({ label, value, explain }) => {
+            const labelExplain = explainTerm(label, 'label');
+            return (
+              <Box
+                key={label}
+                sx={{
+                  p: 1.25,
+                  borderRadius: '12px',
+                  bgcolor: 'rgba(255,255,255,0.02)',
+                  border: '1px solid',
+                  borderColor: 'divider',
+                }}
+              >
+                <TermTip explain={labelExplain}>
+                  <Typography variant="caption" component="span" sx={{ color: MUTED, ...hintSx(labelExplain) }}>{label}</Typography>
+                </TermTip>
+                <TermTip explain={explain}>
+                  <Typography variant="body2" sx={{ color: TEXT, mt: 0.25, ...hintSx(explain) }}>{value || '—'}</Typography>
+                </TermTip>
+              </Box>
+            );
+          })}
         </Box>
       </Card>
 
       {/* 吉神 / 凶煞 */}
       <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1fr 1fr' }, gap: 2, mb: 2 }}>
         <Card sx={{ p: 2 }}>
-          <SectionTitle accent={GREEN}>吉神宜趋</SectionTitle>
-          <TagList items={data.jiShen} tone="green" empty="无" />
+          <SectionTitle accent={GREEN} explain={explainTerm('吉神宜趋', 'label')}>吉神宜趋</SectionTitle>
+          <TagList items={data.jiShen} tone="green" empty="无" category="jiShen" />
         </Card>
         <Card sx={{ p: 2 }}>
-          <SectionTitle accent={RED}>凶煞宜忌</SectionTitle>
-          <TagList items={data.xiongSha} tone="red" empty="无" />
+          <SectionTitle accent={RED} explain={explainTerm('凶煞宜忌', 'label')}>凶煞宜忌</SectionTitle>
+          <TagList items={data.xiongSha} tone="red" empty="无" category="xiongSha" />
         </Card>
       </Box>
 
       {/* 方位 / 彭祖百忌 */}
       <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1fr 1fr' }, gap: 2, mb: 2 }}>
         <Card sx={{ p: 2 }}>
-          <SectionTitle>吉神方位</SectionTitle>
+          <SectionTitle explain={explainTerm('吉神方位', 'label')}>吉神方位</SectionTitle>
           <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(70px, 1fr))', gap: 1 }}>
-            {directions.map(([label, value]) => (
-              <Box
-                key={label}
-                sx={{
-                  textAlign: 'center',
-                  py: 1,
-                  borderRadius: '12px',
-                  bgcolor: 'rgba(210,153,34,0.06)',
-                  border: '1px solid rgba(210,153,34,0.2)',
-                }}
-              >
-                <Typography variant="caption" sx={{ color: MUTED, display: 'block' }}>{label}</Typography>
-                <Typography variant="body1" sx={{ color: GOLD_LIGHT, fontWeight: 600 }}>{value || '—'}</Typography>
-              </Box>
-            ))}
+            {directions.map(({ label, value }) => {
+              const explain = explainTerm(label, 'label');
+              return (
+                <Box
+                  key={label}
+                  sx={{
+                    textAlign: 'center',
+                    py: 1,
+                    borderRadius: '12px',
+                    bgcolor: 'rgba(210,153,34,0.06)',
+                    border: '1px solid rgba(210,153,34,0.2)',
+                  }}
+                >
+                  <TermTip explain={explain}>
+                    <Typography variant="caption" sx={{ color: MUTED, display: 'block', ...hintSx(explain) }}>{label}</Typography>
+                  </TermTip>
+                  <Typography variant="body1" sx={{ color: GOLD_LIGHT, fontWeight: 600 }}>{value || '—'}</Typography>
+                </Box>
+              );
+            })}
           </Box>
         </Card>
 
         <Card sx={{ p: 2 }}>
-          <SectionTitle>彭祖百忌</SectionTitle>
+          <SectionTitle explain={explainTerm('彭祖百忌', 'label')}>彭祖百忌</SectionTitle>
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
-            {data.pengZu.map((line, index) => (
-              <Typography key={index} variant="body2" sx={{ color: TEXT, lineHeight: 1.8 }}>
-                {line}
-              </Typography>
-            ))}
+            {data.pengZu.map((line, index) => {
+              const explain = explainTerm(line, 'pengZu');
+              return (
+                <TermTip key={index} explain={explain}>
+                  <Typography variant="body2" sx={{ color: TEXT, lineHeight: 1.8, ...hintSx(explain) }}>
+                    {line}
+                  </Typography>
+                </TermTip>
+              );
+            })}
           </Box>
         </Card>
       </Box>
@@ -403,6 +540,7 @@ function AlmanacPage() {
       {/* 时辰吉凶 */}
       <Card sx={{ p: 2 }}>
         <SectionTitle
+          explain={explainTerm('时辰吉凶', 'label')}
           extra={(
             <Typography variant="caption" sx={{ color: MUTED }}>
               黄道 {luckyHours} · 黑道 {data.times.length - luckyHours}
@@ -414,24 +552,27 @@ function AlmanacPage() {
         <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(112px, 1fr))', gap: 1 }}>
           {data.times.map((time, index) => {
             const lucky = time.type === '黄道';
+            const explain = explainHour(time);
             return (
-              <Box
-                key={`${time.ganZhi}-${index}`}
-                sx={{
-                  p: 1,
-                  borderRadius: '12px',
-                  border: '1px solid',
-                  borderColor: lucky ? 'rgba(63,185,80,0.3)' : 'divider',
-                  bgcolor: lucky ? 'rgba(63,185,80,0.06)' : 'rgba(255,255,255,0.02)',
-                }}
-              >
-                <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 0.5 }}>
-                  <Typography variant="body2" sx={{ fontWeight: 600, color: TEXT }}>{time.ganZhi}</Typography>
-                  <Typography variant="caption" sx={{ color: lucky ? GREEN_TEXT : '#ff7b72' }}>{time.luck}</Typography>
+              <TermTip key={`${time.ganZhi}-${index}`} explain={explain}>
+                <Box
+                  sx={{
+                    p: 1,
+                    borderRadius: '12px',
+                    border: '1px solid',
+                    borderColor: lucky ? 'rgba(63,185,80,0.3)' : 'divider',
+                    bgcolor: lucky ? 'rgba(63,185,80,0.06)' : 'rgba(255,255,255,0.02)',
+                    ...hintSx(explain),
+                  }}
+                >
+                  <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 0.5 }}>
+                    <Typography variant="body2" sx={{ fontWeight: 600, color: TEXT }}>{time.ganZhi}</Typography>
+                    <Typography variant="caption" sx={{ color: lucky ? GREEN_TEXT : '#ff7b72' }}>{time.luck}</Typography>
+                  </Box>
+                  <Typography variant="caption" sx={{ display: 'block', color: MUTED }}>{time.start}–{time.end}</Typography>
+                  <Typography variant="caption" sx={{ display: 'block', color: lucky ? GREEN_TEXT : '#6e7681' }}>{time.tianShen}</Typography>
                 </Box>
-                <Typography variant="caption" sx={{ display: 'block', color: MUTED }}>{time.start}–{time.end}</Typography>
-                <Typography variant="caption" sx={{ display: 'block', color: lucky ? GREEN_TEXT : '#6e7681' }}>{time.tianShen}</Typography>
-              </Box>
+              </TermTip>
             );
           })}
         </Box>
