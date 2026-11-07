@@ -26,6 +26,7 @@ import {
  * 待办事项页面（左右布局）
  * 左侧：待办事项列表 | 右侧：柯维四象限汇总
  * 左右两侧联动高亮
+ * 宽屏（md 起）页面自身不滚动：右栏四象限整体固定，左栏只有「待办项」列表内滚。
  */
 function TodoPage() {
   const [todos, setTodos] = useState(() => getActiveTodos());
@@ -40,6 +41,7 @@ function TodoPage() {
   const [selectedTodoId, setSelectedTodoId] = useState(null);
   const [dragIndex, setDragIndex] = useState(null);
   const [overIndex, setOverIndex] = useState(null);
+  // 左栏的滚动容器（待办列表那一段），联动高亮时滚到选中的那条
   const leftListRef = useRef(null);
 
   const refreshTodos = useCallback(() => {
@@ -345,7 +347,11 @@ function TodoPage() {
         display: 'flex',
         flexDirection: { xs: 'column', md: 'row' },
         gap: 2,
+        // 宽屏：整页高度锁在可视区内（不随内容长高），滚动权交给左栏列表与右栏象限区。
+        // 窄屏仍是纵向堆叠 + 整页滚动，避免两栏各被压成半屏。
+        height: { xs: 'auto', md: '100%' },
         minHeight: '100%',
+        overflow: { xs: 'visible', md: 'hidden' },
         px: 1.5,
         pt: 2,
         pb: 2,
@@ -353,7 +359,17 @@ function TodoPage() {
       }}
     >
       {/* ============= 左侧：待办列表（1份） ============= */}
-      <Box ref={leftListRef} sx={{ flex: 1, minWidth: 0, overflow: 'auto', px: 0.5, scrollbarGutter: 'stable' }}>
+      {/* 标题、统计概览、筛选/添加那一行都固定，只有下面的待办项列表有自己的滚动条 */}
+      <Box
+        sx={{
+          flex: 1,
+          minWidth: 0,
+          minHeight: 0,
+          display: 'flex',
+          flexDirection: 'column',
+          px: 0.5,
+        }}
+      >
         <Typography variant="h4" sx={{ mb: 1, color: '#c9d1d9' }}>
           待办事项
         </Typography>
@@ -445,64 +461,79 @@ function TodoPage() {
           </Button>
         </Box>
 
-        {/* 待办列表（按统一排序分组展示：Q1→Q2→Q3→Q4，每组内按 order） */}
-        {filteredDisplay.length > 0 ? (
-          <Box>
-            {GROUP_ORDER.map((key) => {
-              const groupItems = filteredDisplay.filter((t) => t.priority === key);
-              if (groupItems.length === 0) return null;
-              const cfg = TODO_PRIORITIES[key];
-              return (
-                <Box key={key} sx={{ mb: 1 }}>
-                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8, mb: 0.5, px: 0.5 }}>
-                    <Box sx={{ width: 3, height: 13, borderRadius: '16px', bgcolor: cfg.color, flexShrink: 0 }} />
-                    <Typography variant="caption" sx={{ color: cfg.color, fontWeight: 700, fontSize: '0.75rem' }}>
-                      {GROUP_LABELS[key]}
-                    </Typography>
-                    <Typography variant="caption" sx={{ color: '#6e7681', fontSize: '0.7rem' }}>
-                      {groupItems.length}
-                    </Typography>
+        {/* 待办列表（按统一排序分组展示：Q1→Q2→Q3→Q4，每组内按 order）
+            这是本页左栏唯一的滚动区（窄屏仍随整页滚动）
+            pr 0.5（4px）+ 滑块在 12px 轨道里的 4px 内缩 = 卡片到滑块 8px，
+            与滑块到左栏右边界（4px 内缩 + 左栏自身 px 0.5 = 8px）对称，卡片不贴滚动条 */}
+        <Box
+          ref={leftListRef}
+          sx={{
+            flex: { xs: '0 0 auto', md: 1 },
+            minHeight: { xs: 0, md: 0 },
+            overflowY: { xs: 'visible', md: 'auto' },
+            overflowX: 'hidden',
+            scrollbarGutter: 'stable',
+            pr: { xs: 0, md: 0.5 },
+          }}
+        >
+          {filteredDisplay.length > 0 ? (
+            <Box>
+              {GROUP_ORDER.map((key) => {
+                const groupItems = filteredDisplay.filter((t) => t.priority === key);
+                if (groupItems.length === 0) return null;
+                const cfg = TODO_PRIORITIES[key];
+                return (
+                  <Box key={key} sx={{ mb: 1 }}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8, mb: 0.5, px: 0.5 }}>
+                      <Box sx={{ width: 3, height: 13, borderRadius: '16px', bgcolor: cfg.color, flexShrink: 0 }} />
+                      <Typography variant="caption" sx={{ color: cfg.color, fontWeight: 700, fontSize: '0.75rem' }}>
+                        {GROUP_LABELS[key]}
+                      </Typography>
+                      <Typography variant="caption" sx={{ color: '#6e7681', fontSize: '0.7rem' }}>
+                        {groupItems.length}
+                      </Typography>
+                    </Box>
+                    {groupItems.map((todo) => {
+                      const gi = filteredDisplay.findIndex((t) => t.id === todo.id);
+                      return (
+                        <TodoCard
+                          key={todo.id}
+                          todo={todo}
+                          onRequestComplete={handleRequestComplete}
+                          onCancelComplete={handleCancelComplete}
+                          onEdit={handleOpenEdit}
+                          onArchive={handleArchive}
+                          onDelete={handleDelete}
+                          onEditRecord={handleEditRecord}
+                          sidebarSelected={selectedTodoId === todo.id || selectedPriority === todo.priority}
+                          index={gi}
+                          onDragStart={handleDragStart}
+                          onDragOver={handleDragOver}
+                          onDrop={handleDrop}
+                          onTogglePhase={handleTogglePhase}
+                        />
+                      );
+                    })}
                   </Box>
-                  {groupItems.map((todo) => {
-                    const gi = filteredDisplay.findIndex((t) => t.id === todo.id);
-                    return (
-                      <TodoCard
-                        key={todo.id}
-                        todo={todo}
-                        onRequestComplete={handleRequestComplete}
-                        onCancelComplete={handleCancelComplete}
-                        onEdit={handleOpenEdit}
-                        onArchive={handleArchive}
-                        onDelete={handleDelete}
-                        onEditRecord={handleEditRecord}
-                        sidebarSelected={selectedTodoId === todo.id || selectedPriority === todo.priority}
-                        index={gi}
-                        onDragStart={handleDragStart}
-                        onDragOver={handleDragOver}
-                        onDrop={handleDrop}
-                        onTogglePhase={handleTogglePhase}
-                      />
-                    );
-                  })}
-                </Box>
-              );
-            })}
-          </Box>
-        ) : (
-          <Box sx={{ textAlign: 'center', py: 6, color: '#6e7681' }}>
-            <Typography variant="body1" sx={{ mb: 1 }}>
-              {filter === 'all' ? '还没有待办事项' : filter === 'pending' ? '没有待完成的待办' : '没有已完成的待办'}
-            </Typography>
-            <Typography variant="body2" sx={{ color: '#484f58' }}>
-              点击下方按钮添加待办
-            </Typography>
-            {filter === 'all' && (
-              <Typography variant="caption" sx={{ color: '#484f58', display: 'block', mt: 1 }}>
-                已归档的待办同样不在这里显示，可在「数据管理 → 归档」中查看与恢复
+                );
+              })}
+            </Box>
+          ) : (
+            <Box sx={{ textAlign: 'center', py: 6, color: '#6e7681' }}>
+              <Typography variant="body1" sx={{ mb: 1 }}>
+                {filter === 'all' ? '还没有待办事项' : filter === 'pending' ? '没有待完成的待办' : '没有已完成的待办'}
               </Typography>
-            )}
-          </Box>
-        )}
+              <Typography variant="body2" sx={{ color: '#484f58' }}>
+                点击下方按钮添加待办
+              </Typography>
+              {filter === 'all' && (
+                <Typography variant="caption" sx={{ color: '#484f58', display: 'block', mt: 1 }}>
+                  已归档的待办同样不在这里显示，可在「数据管理 → 归档」中查看与恢复
+                </Typography>
+              )}
+            </Box>
+          )}
+        </Box>
 
         <AddTodoDialog
           open={dialogOpen}
@@ -536,6 +567,7 @@ function TodoPage() {
       </Box>
 
       {/* ============= 右侧：四象限矩阵（2份） ============= */}
+      {/* 整栏固定：标题不参与滚动，只有象限网格那一段在内容超出时自己滚 */}
       <Box
         sx={{
           flex: 2,
@@ -543,7 +575,7 @@ function TodoPage() {
           minHeight: 0,
           display: 'flex',
           flexDirection: 'column',
-          overflow: 'auto',
+          overflow: { xs: 'visible', md: 'hidden' },
           px: 0.5,
           borderLeft: { md: '1px solid #30363d' },
           pl: { md: 2 },
@@ -553,15 +585,19 @@ function TodoPage() {
           四象限清单
         </Typography>
 
-        {/* 四象限矩阵（2×2 网格；行均分剩余高度填满，象限各自内部滚动） */}
+        {/* 四象限矩阵（2×2 网格：宽屏下两行两列各占四分之一，整块不滚动，
+            超出部分由每个象限自己的列表区上下滚动；窄屏仍随行高自适应、随整页滚动） */}
         <Box
           sx={{
-            flex: 1,
+            flex: { xs: '0 0 auto', md: 1 },
             minHeight: 0,
+            overflow: { xs: 'visible', md: 'hidden' },
             display: 'grid',
-            gridTemplateColumns: '1fr 1fr',
-            gridTemplateRows: 'auto auto',
-            alignContent: 'start',
+            // minmax(0,1fr) 而不是 1fr：1fr 的最小值是 min-content，象限里那行
+            // whiteSpace:nowrap 的标题会把轨道顶宽、让「各占四分之一」在窄屏失效。
+            gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)',
+            gridTemplateRows: { xs: 'auto auto', md: 'minmax(0, 1fr) minmax(0, 1fr)' },
+            alignContent: { xs: 'start', md: 'stretch' },
             gap: 1,
           }}
         >
@@ -582,19 +618,22 @@ function TodoPage() {
                   borderColor: isSelected ? cfg.color : '#30363d',
                   borderRadius: '16px',
                   p: 1.25,
-                  minHeight: 116,
+                  // 宽屏：高度由网格的 minmax(0,1fr) 定死（四个象限各占四分之一），
+                  // 所以这里不能再撑出 minHeight，否则内容多的象限会把行高顶回去。
+                  minHeight: { xs: 116, md: 0 },
                   cursor: 'pointer',
                   transition: 'all 0.2s',
-                  overflow: 'auto',
-                  scrollbarGutter: 'stable',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  overflow: { xs: 'visible', md: 'hidden' },
                   '&:hover': {
                     borderColor: cfg.color,
                     bgcolor: cfg.bg,
                   },
                 }}
               >
-                {/* 象限标题 */}
-                <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 0.75 }}>
+                {/* 象限标题（固定不滚动，滚动只发生在下面的事项列表） */}
+                <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 0.75, flexShrink: 0 }}>
                   <Typography
                     variant="body2"
                     sx={{
@@ -623,6 +662,10 @@ function TodoPage() {
                     onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); setDropTarget({ priority: key, index: 0 }); }}
                     onDrop={(e) => { e.preventDefault(); e.stopPropagation(); handleQuadrantDrop(key, 0); }}
                     sx={{
+                      flex: 1,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
                       color: '#484f58',
                       fontStyle: 'italic',
                       fontSize: '0.75rem',
@@ -636,8 +679,11 @@ function TodoPage() {
                     暂无事项（可拖入）
                   </Box>
                 ) : (
-                  <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
-                    {items.slice(0, 15).map((t, idx) => {
+                  // 象限内唯一的滚动区：pr 1.25 抵掉象限自身 p 1.25，让滑块正好落在
+                  // 「事项」与「象限边框」这条 22px 带的正中，不再贴边。
+                  // scrollbarGutter stable：四个象限都预留同一条 12px 轨道，条目少的象限不会比多的宽一截。
+                  <Box sx={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', gap: 0.5, overflowY: { xs: 'visible', md: 'auto' }, overflowX: 'hidden', scrollbarGutter: { xs: 'auto', md: 'stable' }, pr: { xs: 0, md: 1.25 } }}>
+                    {items.map((t, idx) => {
                       const isDragging = dragTodoId === t.id;
                       const isDrop = dropTarget && dropTarget.priority === key && dropTarget.index === idx;
                       return (
@@ -698,11 +744,6 @@ function TodoPage() {
                       </Box>
                       );
                     })}
-                    {items.length > 15 && (
-                      <Typography variant="caption" sx={{ color: '#6e7681', fontSize: '0.7rem', textAlign: 'center' }}>
-                        +{items.length - 15} 项
-                      </Typography>
-                    )}
                   </Box>
                 )}
               </Box>

@@ -79,6 +79,7 @@ function StatCell({ label, value, highlight }) {
 /**
  * 打卡页面（左右布局）
  * 左侧：每日打卡 | 右侧：汇总统计
+ * 宽屏（md 起）页面自身不滚动：右栏整体固定，左栏只有「打卡项」列表内滚。
  */
 function CheckinPage() {
   const [items, setItems] = useState(() => getActiveCheckinItems());
@@ -307,7 +308,11 @@ function CheckinPage() {
         display: 'flex',
         flexDirection: { xs: 'column', md: 'row' },
         gap: 2,
+        // 宽屏：整页高度锁在可视区内（不随内容长高），滚动权交给左栏列表与右栏内容区。
+        // 窄屏仍是纵向堆叠 + 整页滚动，避免两栏各被压成半屏。
+        height: { xs: 'auto', md: '100%' },
         minHeight: '100%',
+        overflow: { xs: 'visible', md: 'hidden' },
         px: 1.5,
         pt: 2,
         pb: 2,
@@ -315,7 +320,18 @@ function CheckinPage() {
       }}
     >
       {/* ============= 左侧：每日打卡（1份） ============= */}
-      <Box sx={{ flex: 1, minWidth: 0, overflow: 'auto', px: 0.5, scrollbarGutter: 'stable' }}>
+      {/* 标题、日期导航、今日进度、底部分隔线与「添加打卡项目」按钮都固定，
+          只有中间那段打卡项列表有自己的滚动条 */}
+      <Box
+        sx={{
+          flex: 1,
+          minWidth: 0,
+          minHeight: 0,
+          display: 'flex',
+          flexDirection: 'column',
+          px: 0.5,
+        }}
+      >
         <Typography variant="h4" sx={{ mb: 2, color: '#c9d1d9' }}>
           每日打卡
         </Typography>
@@ -403,40 +419,53 @@ function CheckinPage() {
           </Typography>
         </Box>
 
-        {/* 打卡项目列表 */}
-        {hasItems ? (
-          <Box>
-            {items
-              .sort((a, b) => a.order - b.order)
-              .map((item, idx) => (
-                <CheckinItem
-                  key={item.id}
-                  item={item}
-                  record={records[item.id] || null}
-                  onRequestComplete={handleRequestComplete}
-                  onCancelComplete={handleCancelComplete}
-                  onEdit={handleOpenEdit}
-                  onArchive={handleArchiveItem}
-                  onDelete={handleDeleteItem}
-                  onEditRecord={handleEditRecord}
-                  index={idx}
-                  onDragStart={handleDragStart}
-                  onDragOver={handleDragOver}
-                  onDrop={handleDrop}
-                />
-              ))}
-          </Box>
-        ) : (
-          <Box sx={{ textAlign: 'center', py: 6, color: '#6e7681' }}>
-            <Typography variant="body1" sx={{ mb: 1 }}>还没有打卡项目</Typography>
-            <Typography variant="body2" sx={{ color: '#484f58' }}>
-              点击下方按钮添加你的第一个打卡项目
-            </Typography>
-            <Typography variant="caption" sx={{ color: '#484f58', display: 'block', mt: 1 }}>
-              已归档的项目同样不在这里显示，可在「数据管理 → 归档」中查看与恢复
-            </Typography>
-          </Box>
-        )}
+        {/* 打卡项目列表：本页唯一的左栏滚动区（窄屏仍随整页滚动）
+            pr 0.5（4px）+ 滑块在 12px 轨道里的 4px 内缩 = 卡片到滑块 8px，
+            与滑块到左栏右边界（4px 内缩 + 左栏自身 px 0.5 = 8px）正好对称，卡片不再贴滚动条。 */}
+        <Box
+          sx={{
+            flex: { xs: '0 0 auto', md: 1 },
+            minHeight: { xs: 0, md: 0 },
+            overflowY: { xs: 'visible', md: 'auto' },
+            overflowX: 'hidden',
+            scrollbarGutter: 'stable',
+            pr: { xs: 0, md: 0.5 },
+          }}
+        >
+          {hasItems ? (
+            <Box>
+              {items
+                .sort((a, b) => a.order - b.order)
+                .map((item, idx) => (
+                  <CheckinItem
+                    key={item.id}
+                    item={item}
+                    record={records[item.id] || null}
+                    onRequestComplete={handleRequestComplete}
+                    onCancelComplete={handleCancelComplete}
+                    onEdit={handleOpenEdit}
+                    onArchive={handleArchiveItem}
+                    onDelete={handleDeleteItem}
+                    onEditRecord={handleEditRecord}
+                    index={idx}
+                    onDragStart={handleDragStart}
+                    onDragOver={handleDragOver}
+                    onDrop={handleDrop}
+                  />
+                ))}
+            </Box>
+          ) : (
+            <Box sx={{ textAlign: 'center', py: 6, color: '#6e7681' }}>
+              <Typography variant="body1" sx={{ mb: 1 }}>还没有打卡项目</Typography>
+              <Typography variant="body2" sx={{ color: '#484f58' }}>
+                点击下方按钮添加你的第一个打卡项目
+              </Typography>
+              <Typography variant="caption" sx={{ color: '#484f58', display: 'block', mt: 1 }}>
+                已归档的项目同样不在这里显示，可在「数据管理 → 归档」中查看与恢复
+              </Typography>
+            </Box>
+          )}
+        </Box>
 
         <Divider sx={{ my: 2, borderColor: '#30363d' }} />
 
@@ -479,6 +508,7 @@ function CheckinPage() {
       </Box>
 
       {/* ============= 右侧：汇总统计（2份） ============= */}
+      {/* 整栏固定：外层 overflow hidden，只有下方内容区（月历 / 图表）自己滚 */}
       <Box
         sx={{
           flex: 2,

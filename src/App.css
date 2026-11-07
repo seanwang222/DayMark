@@ -18,23 +18,10 @@ body {
   color: #c9d1d9;
 }
 
-/* 自定义滚动条 */
-::-webkit-scrollbar {
-  width: 6px;
-}
-
-::-webkit-scrollbar-track {
-  background: #0d1117;
-}
-
-::-webkit-scrollbar-thumb {
-  background: #30363d;
-  border-radius: 3px;
-}
-
-::-webkit-scrollbar-thumb:hover {
-  background: #484f58;
-}
+/* 滚动条样式只在 index.css 定义一份。
+   这里曾复制过一套 ::-webkit-scrollbar（width:6px、无左右留白），因为 App.css 在
+   main.jsx 里后导入，同特异性下后写的那套生效，把 index.css 的 12px 胶囊轨道压成
+   6px 细条，滑块还 4px 透明边框（6-8<0）挤到看不见，表现为「滚动条贴着卡片」。 */
 
 /* 页面过渡动画 */
 .page-enter {
