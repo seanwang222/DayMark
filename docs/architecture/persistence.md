@@ -81,7 +81,7 @@ renameSync(tmp, file)
 
 ## 冒烟探测为什么必须隔离 userData
 
-`main.js:29-45`：`DAYMARK_SMOKE` 会写一份空快照做 IPC 探针。若不隔离，跑一次探测就把本机真实数据文件清空；而「本地为空」在同步决策里是**被允许的状态**（`planPush` 见 [同步链路](sync.md)），一次上传就把云端也带空。所以冒烟模式把 `userData` 重定向到 `%TEMP%\daymark-smoke-<ts>\`，并在 `will-quit` 删除。探针本身还校验「原子写后能原样读回」（`main.js:407-409`）。
+`main.js:29-45`：`DAYMARK_SMOKE` 会写一份空快照做 IPC 探针。若不隔离，跑一次探测就把本机真实数据文件清空；而「本地为空」在同步决策里是**被允许的状态**（`planPush` 见 [同步链路](sync.md)），一次上传就把云端也带空。所以冒烟模式把 `userData` 重定向到 `%TEMP%\daymark-smoke-<ts>\`，并在 `will-quit` 删除。探针本身还校验「原子写后能原样读回」（`main.js:417-419`）。
 
 ## 归档为什么不需要新的落盘环节
 

@@ -37,7 +37,7 @@ flowchart LR
 
 ## 进程边界只有一道
 
-渲染层与主进程之间只有 `electron/preload.cjs` 白名单暴露的 `window.daymark`（`contextIsolation: true`、`nodeIntegration: false`，`main.js:368-373`）。通道分两类：
+渲染层与主进程之间只有 `electron/preload.cjs` 白名单暴露的 `window.daymark`（`contextIsolation: true`、`nodeIntegration: false`，`main.js:373-378`）。通道分两类：
 
 - **异步（`ipcRenderer.invoke`）**：`load-snapshot` / `save-snapshot` / 配置 / `push-now` / `pull-now` / `test-connection`。
 - **同步（`ipcRenderer.sendSync`）**：只有 `save-snapshot-sync` 一条，专供 `beforeunload`。理由写在[落盘时序](persistence.md#beforeunload-为什么必须走同步通道)。
@@ -54,7 +54,7 @@ flowchart LR
 | 覆盖本机前的留档 | `<userData>/daymark-snapshot.conflict-<时间>.json` | `main.js:116-123` `writeLocalBackup` |
 | 覆盖云端前的留档 | 云端同目录 `daymark-snapshot.cloud-<时间>.json` | `webdav.js:213-219` `pushBackup` |
 
-Windows 上 `<userData>` 实际是 `%APPDATA%\daily-checkin-app\`——目录名取自 `package.json` 的 `name`，不是 `DayMark`。安装版与便携版共用同一个 `<userData>`，所以主进程持单实例锁（`main.js:475-485`）：双开会互相整份盖写快照文件。
+Windows 上 `<userData>` 实际是 `%APPDATA%\daily-checkin-app\`——目录名取自 `package.json` 的 `name`，不是 `DayMark`。安装版与便携版共用同一个 `<userData>`，所以主进程持单实例锁（`main.js:485-495`）：双开会互相整份盖写快照文件。
 
 **用户数据不在仓库里。** 仓库中没有种子数据、没有示例快照，`%APPDATA%` 也在 git 之外。
 
