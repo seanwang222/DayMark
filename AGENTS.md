@@ -40,6 +40,7 @@ DayMark（React 18 + Vite 4 渲染层，Electron 44 桌面层）的协作约定�
 - WebDAV 路径按 URL 段编码（`encodeWebdavPath` / `buildRemoteUrl`）。新增任何拼接远端地址的地方都走这两个函数，否则含空格、中文、`#` 的目录名会莫名 404。**用户填的目录过 `normalizeWebdavDir` 只纠正分隔符写法**（反斜杠→`/`、去首尾斜杠与空段），**绝不删改任何层级**：WebDAV 根对应网页里的哪一层各家实现不同，1.1.3 曾擅自剥掉开头的「我的坚果云」，把本来对的配置改错了。填错时由 `checkConnection()` 的 PROPFIND 自检报告实际缺哪一层。
 - **坚果云用 409 表示「路径不存在」，不给 404**（实测：GET 一个不存在的目录就是 409）。因此：`pull()` 把 404 与 409 一律归一为「云端为空」`{status:404,data:null}`，让同步按"本机较新→上传"走；`ensureDir()` **自顶向下逐级 MKCOL**（一次整路径 MKCOL 遇到 409 就是父目录不存在，旧实现把 409 当"目录已在"吞掉、后面 PUT 必失败）；405/201/200 才算已存在。读写类 409/403 经 `Jianguoyun.failWith` 出口走 `describeHttpError`，附上 `pathDetail` 里的实际请求路径（URL 不含凭据，可安全展示），401 才走 `authDetail`——加新错误分支不要在调用点自己拼文案。
 - 「测试连接」调 `client.checkConnection()` 而不是 `pull()`：它先 GET 快照，命中即 `ready`；404/409 时**逐级 PROPFIND** 定位断在哪一层，并把该层实际存在的目录名列进提示（`parseMultistatus` / `diagnoseMissingLevel` 都是纯函数，可脱离网络测试）。目录存在但没数据文件返回 `ok + empty-dir`，提示去「立即上传」，不当错误报。
+- **窗口默认最大化打开**（1.2.7，本人选定）：`createWindow()` 里的 `maximized: true` 才是「打开即铺满屏幕」的实现，`width/height` 从此只作为「向下还原」之后的尺寸；保留任务栏，所以**不要改成 `fullscreen: true`**（那会连任务栏一起盖掉，退出只剩 F11），也不要把 `maximized` 删回无条件的小窗。
 - 主进程持 `requestSingleInstanceLock`：安装版与便携版共用同一 userData，双开会互相盖写快照文件。新增启动逻辑要放在拿到锁之后。
 - 渲染层与主进程只通过 `electron/preload.cjs` 暴露的 `window.daymark` 通信。`beforeunload` 兜底必须走同步通道 `saveSnapshotSync`（`invoke` 是异步的，`beforeunload` 等不到返回）。
 - 同一时刻只允许一个同步任务（`withSyncLock`）。新增同步入口请包在锁里，并考虑「锁被占用时重新排期」而不是丢弃。
