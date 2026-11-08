@@ -366,7 +366,7 @@ function createWindow() {
     minWidth: 960,
     minHeight: 640,
     // 1.2.7 起默认铺满屏幕（保留任务栏）；width/height 仍是取消最大化后的还原尺寸
-    maximized: true,
+    show: false,
     title: 'DayMark',
     backgroundColor: '#0d1117',
     autoHideMenuBar: true,
@@ -377,6 +377,11 @@ function createWindow() {
       sandbox: false,
     },
   });
+
+  // 构造参数 `maximized: true` 在 Windows / Electron 44 实测不生效（isMaximized() 仍为 false），
+  // 必须在显示出来之前显式 maximize()，否则窗口先以 1280×860 闪一下再放大。
+  mainWindow.maximize();
+  mainWindow.show();
 
   if (isDev) {
     mainWindow.loadURL('http://localhost:3000');
