@@ -365,6 +365,8 @@ function createWindow() {
     height: 860,
     minWidth: 960,
     minHeight: 640,
+    // 1.2.7 起默认铺满屏幕（保留任务栏）；width/height 仍是取消最大化后的还原尺寸
+    maximized: true,
     title: 'DayMark',
     backgroundColor: '#0d1117',
     autoHideMenuBar: true,
