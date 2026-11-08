@@ -452,7 +452,7 @@ function AlmanacPage() {
       </Box>
 
       {/* 日辰详情 */}
-      <Card sx={{ p: 2, mb: 2 }}>
+      <Card sx={{ p: 2, mb: 2, borderColor: 'rgba(210,153,34,0.3)' }}>
         <SectionTitle>日辰详情</SectionTitle>
         <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 1 }}>
           {facts.map(({ label, value, explain }) => {
@@ -482,11 +482,11 @@ function AlmanacPage() {
 
       {/* 吉神 / 凶煞 */}
       <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1fr 1fr' }, gap: 2, mb: 2 }}>
-        <Card sx={{ p: 2 }}>
+        <Card sx={{ p: 2, borderColor: 'rgba(63,185,80,0.3)' }}>
           <SectionTitle accent={GREEN} explain={explainTerm('吉神宜趋', 'label')}>吉神宜趋</SectionTitle>
           <TagList items={data.jiShen} tone="green" empty="无" category="jiShen" />
         </Card>
-        <Card sx={{ p: 2 }}>
+        <Card sx={{ p: 2, borderColor: 'rgba(248,81,73,0.3)' }}>
           <SectionTitle accent={RED} explain={explainTerm('凶煞宜忌', 'label')}>凶煞宜忌</SectionTitle>
           <TagList items={data.xiongSha} tone="red" empty="无" category="xiongSha" />
         </Card>
@@ -494,7 +494,7 @@ function AlmanacPage() {
 
       {/* 方位 / 彭祖百忌 */}
       <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1fr 1fr' }, gap: 2, mb: 2 }}>
-        <Card sx={{ p: 2 }}>
+        <Card sx={{ p: 2, borderColor: 'rgba(210,153,34,0.3)' }}>
           <SectionTitle explain={explainTerm('吉神方位', 'label')}>吉神方位</SectionTitle>
           <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(70px, 1fr))', gap: 1 }}>
             {directions.map(({ label, value }) => {
@@ -520,7 +520,7 @@ function AlmanacPage() {
           </Box>
         </Card>
 
-        <Card sx={{ p: 2 }}>
+        <Card sx={{ p: 2, borderColor: 'rgba(210,153,34,0.3)' }}>
           <SectionTitle explain={explainTerm('彭祖百忌', 'label')}>彭祖百忌</SectionTitle>
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
             {data.pengZu.map((line, index) => {
@@ -538,7 +538,7 @@ function AlmanacPage() {
       </Box>
 
       {/* 时辰吉凶 */}
-      <Card sx={{ p: 2 }}>
+      <Card sx={{ p: 2, borderColor: 'rgba(210,153,34,0.3)' }}>
         <SectionTitle
           explain={explainTerm('时辰吉凶', 'label')}
           extra={(
